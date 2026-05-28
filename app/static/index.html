@@ -350,6 +350,12 @@
       </div>
 
       <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border); display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+        <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">Texto</span>
+        <label style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px" title="Multiplica el tamaño de TODOS los textos que se dibujan sobre el video (labels, panel libre/ocupado, conteos, leyendas). 1 = default; 2 = doble; 0.5 = mitad.">Multiplicador</label>
+        <input id="text-scale-mult" type="number" min="0.2" max="5" step="0.1" value="1.0" style="width:80px" />
+      </div>
+
+      <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
         <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">Borde negro</span>
         <div style="display:flex; align-items:center; gap:8px">
           <input id="outline-line" type="checkbox" checked style="width:auto; margin:0" />
@@ -418,6 +424,14 @@
           <label for="show-mask" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
             Mostrar máscara (seg)
           </label>
+          <input id="mask-alpha" type="number" min="0" max="1" step="0.05" value="0.45" style="width:70px" title="Opacidad de la máscara (0-1)" />
+        </div>
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="bbox-fill" type="checkbox" style="width:auto; margin:0" />
+          <label for="bbox-fill" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Rellenar bbox
+          </label>
+          <input id="bbox-fill-alpha" type="number" min="0" max="1" step="0.05" value="0.15" style="width:70px" title="Opacidad del relleno del bbox (0-1)" />
         </div>
         <div style="display:flex; align-items:center; gap:8px">
           <label for="bbox-label-position" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">
@@ -542,6 +556,17 @@
           <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; min-width:55px">Ocupado</span>
           <input id="roi-panel-occupied-color" type="color" value="#f87171" style="width:38px; height:30px; padding:0; border:1px solid var(--border); border-radius:6px; background:transparent" />
           <input id="roi-panel-occupied-text" type="text" value="ocupado" style="width:120px" />
+        </div>
+        <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+          <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; min-width:55px">Tamaño</span>
+          <label style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">Ancho</label>
+          <input id="roi-panel-cell-w" type="number" min="40" max="500" step="10" value="130" style="width:80px" />
+          <label style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">Alto</label>
+          <input id="roi-panel-cell-h" type="number" min="30" max="500" step="10" value="78" style="width:80px" />
+        </div>
+        <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+          <label style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px" title="Cuánto mantiene 'ocupado' después de la última detección. 0 = sin histéresis (puede flickear).">Persistencia ocupado (s)</label>
+          <input id="occupied-persistence" type="number" min="0" max="30" step="0.5" value="0" style="width:80px" />
         </div>
       </details>
 
@@ -800,7 +825,6 @@ function applySession(s) {
   if (state.classes.length === 0) addClassSilent();
   state.activeClassId = (s.active_class_id != null) ? s.active_class_id : state.classes[0]?.id;
   state.bboxes = (s.bboxes || []).map(b => ({...b}));
-  renderRoiList();
   state.line = s.line ? {...s.line} : null;
   // Single filter ROI (legacy single-ROI behavior preserved)
   state.roi = (s.roi && Array.isArray(s.roi) && s.roi.length >= 3) ? s.roi.map(p => [...p]) : null;
@@ -817,6 +841,7 @@ function applySession(s) {
     state.rois = [];
   }
   state.activeRoiId = state.rois[0]?.id ?? null;
+  renderRoiList();
   // Status panel
   const rp = s.roi_panel || {};
   if (rp.show != null) $('roi-panel-show').checked = !!rp.show;
@@ -826,6 +851,10 @@ function applySession(s) {
   if (rp.occupied_color) $('roi-panel-occupied-color').value = rp.occupied_color;
   if (rp.free_text) $('roi-panel-free-text').value = rp.free_text;
   if (rp.occupied_text) $('roi-panel-occupied-text').value = rp.occupied_text;
+  if (rp.cell_w != null) $('roi-panel-cell-w').value = rp.cell_w;
+  if (rp.cell_h != null) $('roi-panel-cell-h').value = rp.cell_h;
+  if (rp.occupied_persistence_sec != null) $('occupied-persistence').value = rp.occupied_persistence_sec;
+  if (rp.text_scale_mult != null) $('text-scale-mult').value = rp.text_scale_mult;
   state.frameIndex = s.frame_index || 0;
   // Form values
   if (s.prompts != null) $('prompts').value = s.prompts;
@@ -852,6 +881,9 @@ function applySession(s) {
   $('show-class-name').checked = s.show_class_name !== false;  // default true
   $('show-box').checked = s.show_box !== false;
   $('show-mask').checked = !!s.show_mask;
+  $('bbox-fill').checked = !!s.bbox_fill;
+  if (s.bbox_fill_alpha != null) $('bbox-fill-alpha').value = s.bbox_fill_alpha;
+  if (s.mask_alpha != null) $('mask-alpha').value = s.mask_alpha;
   $('show-legend').checked = !!s.show_legend;
   $('legend-corner').value = s.legend_corner || 'TR';
   const t = s.tracker_params || {};
@@ -932,6 +964,9 @@ function snapshotSession() {
     show_class_name: $('show-class-name').checked,
     show_box: $('show-box').checked,
     show_mask: $('show-mask').checked,
+    bbox_fill: $('bbox-fill').checked,
+    bbox_fill_alpha: +$('bbox-fill-alpha').value,
+    mask_alpha: +$('mask-alpha').value,
     show_legend: $('show-legend').checked,
     legend_corner: $('legend-corner').value,
     tracker_params: {
@@ -967,6 +1002,10 @@ function snapshotSession() {
       occupied_color: $('roi-panel-occupied-color').value,
       free_text: $('roi-panel-free-text').value,
       occupied_text: $('roi-panel-occupied-text').value,
+      cell_w: +$('roi-panel-cell-w').value,
+      cell_h: +$('roi-panel-cell-h').value,
+      occupied_persistence_sec: +$('occupied-persistence').value,
+      text_scale_mult: +$('text-scale-mult').value,
     },
   };
 }
@@ -1310,16 +1349,38 @@ function renderRoiList() {
   state.rois.forEach((r, i) => {
     const row = document.createElement('div');
     row.className = 'class-row' + (r.id === state.activeRoiId ? ' active' : '');
+    const upDisabled = i === 0 ? 'disabled' : '';
+    const downDisabled = i === state.rois.length - 1 ? 'disabled' : '';
     row.innerHTML = `
+      <div style="display:flex; flex-direction:column; gap:1px">
+        <button type="button" class="icon up" title="Mover arriba" ${upDisabled} style="padding:0 4px; font-size:11px">▲</button>
+        <button type="button" class="icon down" title="Mover abajo" ${downDisabled} style="padding:0 4px; font-size:11px">▼</button>
+      </div>
       <input type="color" class="swatch" value="${r.color}" title="Color" />
       <input type="text" placeholder="nombre" value="${escapeAttr(r.name)}" />
       <div class="count">#${i+1} · umbral <input type="number" min="1" max="50" value="${r.occupancy_threshold || 1}" style="width:50px; padding:2px 4px; font-size:12px" /></div>
       <button type="button" class="icon">×</button>`;
-    const [sw, nameInput, countDiv, del] = row.children;
+    const [arrows, sw, nameInput, countDiv, del] = row.children;
+    const upBtn = arrows.querySelector('.up');
+    const downBtn = arrows.querySelector('.down');
     const thrInput = countDiv.querySelector('input');
     sw.addEventListener('input', (e) => { r.color = e.target.value; renderOverlay(); scheduleSave(); });
     nameInput.addEventListener('input', (e) => { r.name = e.target.value; renderOverlay(); scheduleSave(); });
     thrInput.addEventListener('input', (e) => { r.occupancy_threshold = Math.max(1, +e.target.value || 1); scheduleSave(); });
+    upBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (i === 0) return;
+      pushHistory();
+      [state.rois[i-1], state.rois[i]] = [state.rois[i], state.rois[i-1]];
+      renderRoiList(); renderOverlay(); scheduleSave();
+    });
+    downBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (i === state.rois.length - 1) return;
+      pushHistory();
+      [state.rois[i+1], state.rois[i]] = [state.rois[i], state.rois[i+1]];
+      renderRoiList(); renderOverlay(); scheduleSave();
+    });
     del.addEventListener('click', (e) => {
       e.stopPropagation();
       pushHistory();
@@ -1328,7 +1389,7 @@ function renderRoiList() {
       renderRoiList(); renderOverlay(); updateRoiButtons(); scheduleSave();
     });
     row.addEventListener('click', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target === del) return;
+      if (e.target.tagName === 'INPUT' || e.target === del || e.target === upBtn || e.target === downBtn) return;
       state.activeRoiId = r.id; renderRoiList();
     });
     list.appendChild(row);
@@ -1897,6 +1958,10 @@ function buildJobForm() {
   fd.append('roi_panel_occupied_color', $('roi-panel-occupied-color').value);
   fd.append('roi_panel_free_text', $('roi-panel-free-text').value);
   fd.append('roi_panel_occupied_text', $('roi-panel-occupied-text').value);
+  fd.append('roi_panel_cell_w', $('roi-panel-cell-w').value);
+  fd.append('roi_panel_cell_h', $('roi-panel-cell-h').value);
+  fd.append('occupied_persistence_sec', $('occupied-persistence').value);
+  fd.append('text_scale_mult', $('text-scale-mult').value);
   fd.append('in_label', $('in-label').value);
   fd.append('out_label', $('out-label').value);
   fd.append('show_in', $('show-in').checked ? 'true' : 'false');
@@ -1911,6 +1976,9 @@ function buildJobForm() {
   fd.append('show_class_name', $('show-class-name').checked ? 'true' : 'false');
   fd.append('show_box', $('show-box').checked ? 'true' : 'false');
   fd.append('show_mask', $('show-mask').checked ? 'true' : 'false');
+  fd.append('bbox_fill', $('bbox-fill').checked ? 'true' : 'false');
+  fd.append('bbox_fill_alpha', $('bbox-fill-alpha').value);
+  fd.append('mask_alpha', $('mask-alpha').value);
   fd.append('show_legend', $('show-legend').checked ? 'true' : 'false');
   fd.append('legend_corner', $('legend-corner').value);
   // class_colors aligned with unique cls ids (sequential 0..N-1 after remap)
@@ -2162,7 +2230,7 @@ updateHint();
 
 // Auto-save on advanced/config input changes
 ['prompts', 'model', 'conf', 'stride', 'device', 'tracker', 'show-id', 'show-conf',
- 'show-class-name', 'show-box', 'show-mask',
+ 'show-class-name', 'show-box', 'show-mask', 'bbox-fill', 'bbox-fill-alpha', 'mask-alpha',
  'show-legend', 'legend-corner',
  't-act', 't-lost', 't-match', 't-min', 't-ghost', 't-ghost-age', 't-smooth', 't-smooth-factor',
  'show-rate', 'rate-unit', 'rate-source', 'rate-min', 'rate-max', 'show-rate-window',
@@ -2173,6 +2241,7 @@ updateHint();
  'roi-panel-show', 'roi-panel-stack', 'roi-panel-corner',
  'roi-panel-free-color', 'roi-panel-occupied-color',
  'roi-panel-free-text', 'roi-panel-occupied-text',
+ 'roi-panel-cell-w', 'roi-panel-cell-h', 'occupied-persistence', 'text-scale-mult',
  'in-label', 'out-label', 'show-in', 'show-out',
  'show-counts-overlay', 'counts-corner',
  'bbox-label-position', 'line-label-position', 'roi-label-position'].forEach(id => {

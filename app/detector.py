@@ -52,6 +52,13 @@ class StreamConfig:
     roi_panel_occupied_color: str = "#f87171"
     roi_panel_free_text: str = "libre"
     roi_panel_occupied_text: str = "ocupado"
+    roi_panel_cell_w: int = 130
+    roi_panel_cell_h: int = 78
+    # Occupancy stays "occupied" for at least N seconds after the last detection
+    # — kills the flicker when a car/object briefly disappears.
+    occupied_persistence_sec: float = 0.0
+    # Multiplies every text scale (panels, labels, line counts, ROI names…).
+    text_scale_mult: float = 1.0
     # Tracker params (ByteTrack)
     track_activation_threshold: float = 0.25
     lost_track_buffer: int = 30
@@ -108,6 +115,10 @@ class StreamConfig:
     show_class_name: bool = True
     show_box: bool = True
     show_mask: bool = False
+    # Fill / alpha
+    bbox_fill: bool = False
+    bbox_fill_alpha: float = 0.15
+    mask_alpha: float = 0.45
     # Class colors (hex), aligned with class index
     class_colors: list[str] = field(default_factory=list)
     # Legend overlay
@@ -237,8 +248,11 @@ def _draw_roi_status_panel(img, rois: list[dict], occupancy: dict[str, dict], cf
     font = cv2.FONT_HERSHEY_SIMPLEX
     name_scale = 0.45
     status_scale = 0.55
-    cell_w = 130
-    cell_h = 78
+    cell_w = max(40, int(getattr(cfg, "roi_panel_cell_w", 130)))
+    cell_h = max(30, int(getattr(cfg, "roi_panel_cell_h", 78)))
+    tsm = max(0.2, min(5.0, getattr(cfg, "text_scale_mult", 1.0)))
+    name_scale = 0.45 * tsm
+    status_scale = 0.55 * tsm
     pad = 8
     gap = 6
     n = len(rois)
@@ -597,16 +611,18 @@ def run_stream(
         bbox_pos = sv.Position[cfg.bbox_label_position]
     except KeyError:
         bbox_pos = sv.Position.TOP_LEFT
+    tsm = max(0.2, min(5.0, cfg.text_scale_mult))
     # Label outline: stack two LabelAnnotators with different paddings — the
     # bigger black one peeks out around the smaller colored one as a 1-2 px ring.
     label_outline_ann = sv.LabelAnnotator(
-        text_scale=0.5, text_padding=5, text_thickness=1,
+        text_scale=0.5 * tsm, text_padding=5, text_thickness=1,
         text_position=bbox_pos,
         color=sv.Color.BLACK, text_color=sv.Color.BLACK,
     ) if cfg.outline_bbox else None
-    label_ann = sv.LabelAnnotator(text_scale=0.5, text_padding=3, text_thickness=1,
+    label_ann = sv.LabelAnnotator(text_scale=0.5 * tsm, text_padding=3, text_thickness=1,
                                   text_position=bbox_pos, color=palette)
-    mask_ann = sv.MaskAnnotator(color=palette, opacity=0.45) if cfg.show_mask else None
+    mask_ann = sv.MaskAnnotator(color=palette, opacity=max(0.0, min(1.0, cfg.mask_alpha))) if cfg.show_mask else None
+    color_ann = sv.ColorAnnotator(color=palette, opacity=max(0.0, min(1.0, cfg.bbox_fill_alpha))) if cfg.bbox_fill else None
     bbox_center_rgb = _hex_to_rgb(cfg.bbox_center_color, (255, 255, 255))
 
     line_rgb = _hex_to_rgb(cfg.line_color, (244, 114, 182))
@@ -623,7 +639,7 @@ def run_stream(
         # If counts overlay is on, suppress on-line text — counts go in the corner box.
         on_line = not cfg.show_counts_overlay
         line_annotator = sv.LineZoneAnnotator(
-            thickness=cfg.line_thickness, text_thickness=1, text_scale=0.6, text_padding=4,
+            thickness=cfg.line_thickness, text_thickness=1, text_scale=0.6 * tsm, text_padding=4,
             color=sv.Color(*line_rgb),
             custom_in_text=cfg.in_label or "in",
             custom_out_text=cfg.out_label or "out",
@@ -639,7 +655,7 @@ def run_stream(
         roi_zone = sv.PolygonZone(polygon=polygon, triggering_anchors=[sv.Position.CENTER])
         roi_annotator = sv.PolygonZoneAnnotator(
             zone=roi_zone, color=sv.Color(*roi_rgb),
-            thickness=2, text_scale=0.5, text_thickness=1, text_padding=4,
+            thickness=2, text_scale=0.5 * tsm, text_thickness=1, text_padding=4,
             display_in_zone_count=False, opacity=0.10,
         )
 
@@ -657,7 +673,7 @@ def run_stream(
         zone = sv.PolygonZone(polygon=poly, triggering_anchors=[sv.Position.CENTER])
         annotator = sv.PolygonZoneAnnotator(
             zone=zone, color=sv.Color(*rgb),
-            thickness=2, text_scale=0.5, text_thickness=1, text_padding=4,
+            thickness=2, text_scale=0.5 * tsm, text_thickness=1, text_padding=4,
             display_in_zone_count=False, opacity=0.10,
         )
         multi_rois.append({
@@ -695,6 +711,8 @@ def run_stream(
     n = 0
     tracker_class_map: dict[int, int] = {}  # tracker_id → class_id (for ghost reconstruction)
     smoothed_xyxy: dict[int, np.ndarray] = {}  # tracker_id → EMA-smoothed xyxy
+    roi_persistence_frames = max(0, int(round(cfg.occupied_persistence_sec * fr)))
+    roi_last_occupied_frame: dict[str, int] = {}
     try:
         for result in model.predict(**kwargs):
             scene = result.orig_img.copy()  # BGR ndarray
@@ -714,7 +732,9 @@ def run_stream(
             if roi_zone is not None and len(detections) > 0:
                 inside = roi_zone.trigger(detections)
                 detections = detections[inside]
-            real_dets_with_masks = None  # reference to pre-merge real detections (for mask rendering)
+            # Always keep a reference to the pre-merge real detections so we can
+            # render masks later (the merge below strips the mask field).
+            real_dets_with_masks = detections
             if tracker is not None:
                 detections = tracker.update_with_detections(detections)
                 if detections.tracker_id is not None and detections.class_id is not None:
@@ -736,9 +756,7 @@ def run_stream(
                             smoothed_xyxy[tid_i] = new_xyxy[i].copy()
                         new_xyxy[i] = smoothed_xyxy[tid_i]
                     detections.xyxy = new_xyxy
-                # Keep a handle on the real (pre-merge) detections so we can render
-                # their masks later — the merge below strips the mask field.
-                real_dets_with_masks = detections
+                real_dets_with_masks = detections  # refresh after tracker filtering
                 if cfg.show_ghost_tracks:
                     ghosts = _ghost_detections(tracker, tracker_class_map,
                                                cfg.ghost_max_age, is_obb=is_obb)
@@ -789,8 +807,13 @@ def run_stream(
                     cnt = int(np.asarray(inside_roi).sum())
                 else:
                     cnt = 0
+                raw_occ = cnt >= r["threshold"]
+                if raw_occ:
+                    roi_last_occupied_frame[r["name"]] = n
+                last_n = roi_last_occupied_frame.get(r["name"], -10 ** 9)
+                sticky_occ = raw_occ or (n - last_n) <= roi_persistence_frames
                 roi_occupancy[r["name"]] = {
-                    "occupied": cnt >= r["threshold"], "count": cnt,
+                    "occupied": bool(sticky_occ), "count": cnt,
                 }
 
             # ----- Phase 3: labels -----
@@ -842,6 +865,10 @@ def run_stream(
                and real_dets_with_masks.mask is not None and len(real_dets_with_masks) > 0:
                 scene = mask_ann.annotate(scene=scene, detections=real_dets_with_masks)
             if len(detections) > 0:
+                # Translucent fill inside each bbox (axis-aligned). Draw before the
+                # outline so the box border stays sharp.
+                if color_ann is not None:
+                    scene = color_ann.annotate(scene=scene, detections=detections)
                 if cfg.show_box:
                     if box_outline_ann is not None:
                         scene = box_outline_ann.annotate(scene=scene, detections=detections)
