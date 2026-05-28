@@ -31,6 +31,22 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _safe_dict_int(raw: str) -> dict[str, int]:
+    try:
+        d = json.loads(raw or "{}")
+        return {str(k): int(v) for k, v in d.items()} if isinstance(d, dict) else {}
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return {}
+
+
+def _safe_dict_float(raw: str) -> dict[str, float]:
+    try:
+        d = json.loads(raw or "{}")
+        return {str(k): float(v) for k, v in d.items()} if isinstance(d, dict) else {}
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return {}
+
+
 def _meta_path(upload_id: str) -> Path:
     return UPLOAD_DIR / f"{upload_id}.json"
 
@@ -315,6 +331,9 @@ async def create_job(
     show_bbox_center: bool = Form(False),
     bbox_center_color: str = Form("#ffffff"),
     bbox_center_size: int = Form(4),
+    initial_counts_in: str = Form("{}"),
+    initial_counts_out: str = Form("{}"),
+    initial_rates: str = Form("{}"),
     show_id: bool = Form(True),
     show_conf: bool = Form(True),
     line_label: str = Form(""),
@@ -384,6 +403,9 @@ async def create_job(
         show_bbox_center=show_bbox_center,
         bbox_center_color=bbox_center_color,
         bbox_center_size=max(1, bbox_center_size),
+        initial_counts_in=_safe_dict_int(initial_counts_in),
+        initial_counts_out=_safe_dict_int(initial_counts_out),
+        initial_rates=_safe_dict_float(initial_rates),
         show_id=show_id, show_conf=show_conf,
         line_label=line_label, roi_label=roi_label,
         line_color=line_color, roi_color=roi_color,

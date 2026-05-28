@@ -63,6 +63,10 @@ class StreamConfig:
     show_bbox_center: bool = False
     bbox_center_color: str = "#ffffff"
     bbox_center_size: int = 4
+    # Per-class baseline (offset added to counts; shown as rate until real events arrive)
+    initial_counts_in: dict[str, int] = field(default_factory=dict)
+    initial_counts_out: dict[str, int] = field(default_factory=dict)
+    initial_rates: dict[str, float] = field(default_factory=dict)
     # Label display options
     show_id: bool = True
     show_conf: bool = True
@@ -261,7 +265,7 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
     swatch_gap = 6
     # Compute box size
     widths = [cv2.getTextSize(l, font, scale, thick)[0][0] for l in lines]
-    w = swatch_w + swatch_gap + max(widths) + pad * 2
+    w = max(widths) + pad * 2
     h = line_h * len(lines) + pad
     H, W = img.shape[:2]
     if corner == "TR":
@@ -277,18 +281,15 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
     cv2.rectangle(overlay, (x0, y0), (x0 + w, y0 + h), (12, 16, 22), -1)
     cv2.addWeighted(overlay, 0.65, img, 0.35, 0, dst=img)
     cv2.rectangle(img, (x0, y0), (x0 + w, y0 + h), (60, 80, 100), 1)
-    # Line swatch in header row (identifies which line these counts belong to)
+    # Text lines. Header row uses the line color (no swatch). Data rows tint
+    # by class color.
     bgr_line = (line_rgb[2], line_rgb[1], line_rgb[0])
-    sw_x = x0 + pad
-    sw_y = y0 + pad + 4
-    cv2.rectangle(img, (sw_x, sw_y), (sw_x + swatch_w, sw_y + swatch_w), bgr_line, -1)
-    cv2.rectangle(img, (sw_x, sw_y), (sw_x + swatch_w, sw_y + swatch_w), (230, 232, 235), 1)
-    # Text lines, shifted right to leave room for swatch column.
-    # Per-class rows get tinted with the class color (header stays neutral).
-    text_x = x0 + pad + swatch_w + swatch_gap
+    text_x = x0 + pad
     for i, line in enumerate(lines):
         y = y0 + pad + line_h * (i + 1) - 6
-        if i == 0 or class_colors is None or (i - 1) >= len(class_colors):
+        if i == 0:
+            color = bgr_line
+        elif class_colors is None or (i - 1) >= len(class_colors):
             color = (230, 232, 235)
         else:
             r, g, b = class_colors[i - 1]
@@ -329,7 +330,9 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
         cv2.rectangle(img, (rx0, ry0), (rx0 + rw, ry0 + rh), (60, 80, 100), 1)
         for i, line in enumerate(rlines):
             y = ry0 + pad + line_h * (i + 1) - 6
-            if i == 0 or class_colors is None or (i - 1) >= len(class_colors):
+            if i == 0:
+                color = bgr_line
+            elif class_colors is None or (i - 1) >= len(class_colors):
                 color = (230, 232, 235)
             else:
                 r, g, b = class_colors[i - 1]
@@ -533,12 +536,12 @@ def run_stream(
             display_in_zone_count=False, opacity=0.10,
         )
 
-    counts_in: dict[str, int] = {n: 0 for n in names}
-    counts_out: dict[str, int] = {n: 0 for n in names}
+    counts_in: dict[str, int] = {n: int(cfg.initial_counts_in.get(n, 0)) for n in names}
+    counts_out: dict[str, int] = {n: int(cfg.initial_counts_out.get(n, 0)) for n in names}
     # Throughput: per-class deque of video timestamps when crossings happened
     from collections import deque as _deque
     event_times: dict[str, _deque] = {n: _deque() for n in names}
-    rates: dict[str, float] = {n: 0.0 for n in names}
+    rates: dict[str, float] = {n: float(cfg.initial_rates.get(n, 0.0)) for n in names}
     current_window = 0.0
     out_fps = fr
 
@@ -649,7 +652,11 @@ def run_stream(
                 for cname, dq in event_times.items():
                     while dq and dq[0] < cutoff:
                         dq.popleft()
-                    rates[cname] = (len(dq) / current_window) * factor if current_window > 0 else 0.0
+                    if len(dq) > 0 and current_window > 0:
+                        rates[cname] = (len(dq) / current_window) * factor
+                    else:
+                        # No real events yet for this class — keep the user-supplied baseline
+                        rates[cname] = float(cfg.initial_rates.get(cname, 0.0))
                 # Outline pass: draw a thicker black line first so the colored
                 # line on top has a dark border for visibility on any background.
                 if cfg.outline_line:

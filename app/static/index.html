@@ -457,6 +457,12 @@
       </details>
 
       <details style="margin-top:14px">
+        <summary>Valores iniciales (offset por clase)</summary>
+        <div class="hint" style="margin-bottom:8px">Sumás un baseline a cada clase (útil si seguís un conteo anterior). La tasa inicial se muestra hasta que entren cruces reales.</div>
+        <div id="initial-grid" style="display:grid; gap:6px"></div>
+      </details>
+
+      <details style="margin-top:14px">
         <summary>Tasa de conteo</summary>
         <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
           <div style="display:flex; align-items:center; gap:8px">
@@ -691,6 +697,8 @@ function applySession(s) {
   if (sp.show_center != null) $('show-bbox-center').checked = !!sp.show_center;
   if (sp.center_color) $('bbox-center-color').value = sp.center_color;
   if (sp.center_size != null) $('bbox-center-size').value = sp.center_size;
+  state.initialCounts = s.initial_counts || {};
+  state.initialRates = s.initial_rates || {};
   // Update UI
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.mode === state.mode));
   $('mode-text').style.display = state.mode === 'text' ? 'block' : 'none';
@@ -757,6 +765,8 @@ function snapshotSession() {
       center_color: $('bbox-center-color').value,
       center_size: +$('bbox-center-size').value,
     },
+    initial_counts: state.initialCounts || {},
+    initial_rates: state.initialRates || {},
   };
 }
 
@@ -945,6 +955,7 @@ $('add-class').addEventListener('click', () => addClass(false));
 
 function renderClasses() {
   renderBboxList();
+  renderInitialValues();
   const list = $('class-list');
   list.innerHTML = '';
   state.classes.forEach(c => {
@@ -978,6 +989,51 @@ function renderClasses() {
   });
 }
 function escapeAttr(s) { return String(s).replace(/"/g, '&quot;'); }
+
+function currentClassNames() {
+  if (state.mode === 'visual') {
+    const usedIds = [...new Set(state.bboxes.map(b => b.cls))].sort((a,b)=>a-b);
+    return usedIds.map(cid => className(cid));
+  }
+  return $('prompts').value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function renderInitialValues() {
+  const grid = $('initial-grid');
+  if (!grid) return;
+  const names = currentClassNames();
+  state.initialCounts = state.initialCounts || {};
+  state.initialRates = state.initialRates || {};
+  grid.style.gridTemplateColumns = '1fr auto auto auto';
+  let html = `<div class="ch">Clase</div><div class="ch" style="text-align:center">in</div><div class="ch" style="text-align:center">out</div><div class="ch" style="text-align:center">tasa</div>`;
+  for (const n of names) {
+    const inV = state.initialCounts[n]?.in ?? 0;
+    const outV = state.initialCounts[n]?.out ?? 0;
+    const rateV = state.initialRates[n] ?? 0;
+    const safe = escapeAttr(n);
+    html += `
+      <div style="align-self:center">${escapeHtml(n)}</div>
+      <input data-init="in" data-name="${safe}" type="number" min="0" step="1" value="${inV}" style="width:80px; text-align:center" />
+      <input data-init="out" data-name="${safe}" type="number" min="0" step="1" value="${outV}" style="width:80px; text-align:center" />
+      <input data-init="rate" data-name="${safe}" type="number" min="0" step="0.5" value="${rateV}" style="width:80px; text-align:center" />`;
+  }
+  if (names.length === 0) html += `<div class="sub" style="grid-column:1 / -1">Agregá una clase (o prompts) primero.</div>`;
+  grid.innerHTML = html;
+  grid.querySelectorAll('input[data-init]').forEach(el => {
+    el.addEventListener('input', (e) => {
+      const kind = e.target.dataset.init;
+      const name = e.target.dataset.name;
+      const v = +e.target.value || 0;
+      if (kind === 'rate') {
+        state.initialRates[name] = v;
+      } else {
+        state.initialCounts[name] = state.initialCounts[name] || { in: 0, out: 0 };
+        state.initialCounts[name][kind] = v;
+      }
+      scheduleSave();
+    });
+  });
+}
 
 function renderBboxList() {
   const list = $('bbox-list');
@@ -1372,6 +1428,18 @@ function buildJobForm() {
   fd.append('show_bbox_center', $('show-bbox-center').checked ? 'true' : 'false');
   fd.append('bbox_center_color', $('bbox-center-color').value);
   fd.append('bbox_center_size', $('bbox-center-size').value);
+  // Pack initial values by class name
+  const initIn = {}, initOut = {}, initRate = {};
+  for (const n of currentClassNames()) {
+    const c = state.initialCounts?.[n] || {};
+    if (c.in) initIn[n] = c.in;
+    if (c.out) initOut[n] = c.out;
+    const r = state.initialRates?.[n];
+    if (r) initRate[n] = r;
+  }
+  fd.append('initial_counts_in', JSON.stringify(initIn));
+  fd.append('initial_counts_out', JSON.stringify(initOut));
+  fd.append('initial_rates', JSON.stringify(initRate));
 
   if (state.mode === 'text') {
     fd.append('prompts', $('prompts').value);
@@ -1471,16 +1539,15 @@ function renderCounts(job) {
     const outLbl = ($('out-label').value.trim() || 'out').toUpperCase();
     $('counts').style.display = 'block';
     const grid = $('counts-grid');
-    const cols = ['auto', '1fr'].concat(showIn ? ['auto'] : [], showOut ? ['auto'] : []);
+    const cols = ['1fr'].concat(showIn ? ['auto'] : [], showOut ? ['auto'] : []);
     grid.style.gridTemplateColumns = cols.join(' ');
-    const sw = `<div style="width:14px;height:14px;border-radius:3px;background:${lineColor};border:1px solid var(--border);align-self:center"></div>`;
-    let html = `${sw}<div class="ch">Clase</div>`;
-    if (showIn) html += `<div class="ch in" style="text-align:right">${escapeHtml(inLbl)}</div>`;
-    if (showOut) html += `<div class="ch out" style="text-align:right">${escapeHtml(outLbl)}</div>`;
+    let html = `<div class="ch" style="color:${lineColor}">Clase</div>`;
+    if (showIn) html += `<div class="ch" style="color:${lineColor}; text-align:right">${escapeHtml(inLbl)}</div>`;
+    if (showOut) html += `<div class="ch" style="color:${lineColor}; text-align:right">${escapeHtml(outLbl)}</div>`;
     const classColors = job.class_colors || [];
     names.forEach((n, i) => {
       const col = classColors[i] || 'var(--text)';
-      html += `<div></div><div class="cn" style="color:${col}">${escapeHtml(n)}</div>`;
+      html += `<div class="cn" style="color:${col}">${escapeHtml(n)}</div>`;
       if (showIn) html += `<div class="cv" style="color:${col}">${cin[n] ?? 0}</div>`;
       if (showOut) html += `<div class="cv" style="color:${col}">${cout[n] ?? 0}</div>`;
     });
@@ -1499,14 +1566,13 @@ function renderCounts(job) {
     $('rate-window-label').textContent = (showWin && win > 0) ? `· ventana ${win.toFixed(1)}s` : '';
     $('rates-panel').style.display = 'block';
     const rgrid = $('rates-grid');
-    rgrid.style.gridTemplateColumns = 'auto 1fr auto';
-    const sw = `<div style="width:14px;height:14px;border-radius:3px;background:${lineColor};border:1px solid var(--border);align-self:center"></div>`;
+    rgrid.style.gridTemplateColumns = '1fr auto';
     const rateColHeader = ($('rate-unit').value === 'sec') ? 'clase / seg' : 'clase / min';
-    let rhtml = `${sw}<div class="ch">Clase</div><div class="ch" style="text-align:center">${rateColHeader}</div>`;
+    let rhtml = `<div class="ch" style="color:${lineColor}">Clase</div><div class="ch" style="color:${lineColor}; text-align:center">${rateColHeader}</div>`;
     const classColors2 = job.class_colors || [];
     names.forEach((n, i) => {
       const col = classColors2[i] || 'var(--accent)';
-      rhtml += `<div></div><div class="cn" style="color:${col}">${escapeHtml(n)}</div><div class="cv" style="color:${col}; text-align:center">${(rates[n] ?? 0).toFixed(1)}</div>`;
+      rhtml += `<div class="cn" style="color:${col}">${escapeHtml(n)}</div><div class="cv" style="color:${col}; text-align:center">${(rates[n] ?? 0).toFixed(1)}</div>`;
     });
     rgrid.innerHTML = rhtml;
   } else {
