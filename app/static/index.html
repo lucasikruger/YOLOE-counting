@@ -413,6 +413,35 @@
             <input id="t-ghost-age" type="number" min="1" max="120" step="1" value="10" style="width:80px" />
           </div>
         </div>
+
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border)">
+          <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+            <div style="display:flex; align-items:center; gap:8px">
+              <input id="show-rate" type="checkbox" checked style="width:auto; margin:0" />
+              <label for="show-rate" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+                Tasa por clase
+              </label>
+            </div>
+            <select id="rate-unit" style="width:auto" title="Unidad de la tasa">
+              <option value="min" selected>por minuto</option>
+              <option value="sec">por segundo</option>
+            </select>
+            <select id="rate-source" style="width:auto" title="Qué cruces cuenta">
+              <option value="both" selected>in + out</option>
+              <option value="in">solo in</option>
+              <option value="out">solo out</option>
+            </select>
+            <label for="rate-min" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">
+              Ventana mín (s)
+            </label>
+            <input id="rate-min" type="number" min="0.1" max="60" step="0.5" value="1" style="width:80px" />
+            <label for="rate-max" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">
+              Ventana máx (s)
+            </label>
+            <input id="rate-max" type="number" min="1" max="120" step="1" value="5" style="width:80px" />
+          </div>
+          <div class="hint">La ventana arranca chica (ventana mín) y crece con el tiempo de video procesado hasta el techo (ventana máx). Así al principio no hay valores con ruido por dividir entre 0.</div>
+        </div>
         <div class="hint">Subí <b>min consecutive frames</b> a 2-3 si ves IDs flickering. Bajá <b>matching</b> a 0.5-0.6 si los objetos se mueven mucho. <b>Cajas fantasma</b>: muestra la predicción Kalman cuando el detector pierde el objeto por unos frames (oclusión, inclinación). Subí <b>edad máx</b> para tolerar oclusiones más largas, pero la predicción se vuelve menos confiable.</div>
       </details>
     </details>
@@ -443,6 +472,11 @@
     <div id="counts" style="display:none; margin-top:14px">
       <label>Conteos por clase</label>
       <div class="counts-grid" id="counts-grid"></div>
+    </div>
+
+    <div id="rates-panel" style="display:none; margin-top:14px">
+      <label>Tasa <span id="rate-unit-label">por minuto</span> <span class="sub" id="rate-window-label" style="text-transform:none; letter-spacing:normal"></span></label>
+      <div class="counts-grid" id="rates-grid"></div>
     </div>
 
     <div class="actions" id="download-row" style="display:none">
@@ -588,6 +622,12 @@ function applySession(s) {
   if (t.min != null) $('t-min').value = t.min;
   if (t.ghost != null) $('t-ghost').checked = !!t.ghost;
   if (t.ghost_age != null) $('t-ghost-age').value = t.ghost_age;
+  const r = s.rate_params || {};
+  if (r.show != null) $('show-rate').checked = !!r.show;
+  if (r.unit) $('rate-unit').value = r.unit;
+  if (r.source) $('rate-source').value = r.source;
+  if (r.win_min != null) $('rate-min').value = r.win_min;
+  if (r.win_max != null) $('rate-max').value = r.win_max;
   // Update UI
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.mode === state.mode));
   $('mode-text').style.display = state.mode === 'text' ? 'block' : 'none';
@@ -637,6 +677,11 @@ function snapshotSession() {
       act: +$('t-act').value, lost: +$('t-lost').value,
       match: +$('t-match').value, min: +$('t-min').value,
       ghost: $('t-ghost').checked, ghost_age: +$('t-ghost-age').value,
+    },
+    rate_params: {
+      show: $('show-rate').checked, unit: $('rate-unit').value,
+      source: $('rate-source').value,
+      win_min: +$('rate-min').value, win_max: +$('rate-max').value,
     },
   };
 }
@@ -1239,6 +1284,11 @@ function buildJobForm() {
   fd.append('minimum_consecutive_frames', $('t-min').value);
   fd.append('show_ghost_tracks', $('t-ghost').checked ? 'true' : 'false');
   fd.append('ghost_max_age', $('t-ghost-age').value);
+  fd.append('show_rate', $('show-rate').checked ? 'true' : 'false');
+  fd.append('rate_unit', $('rate-unit').value);
+  fd.append('rate_window_min_sec', $('rate-min').value);
+  fd.append('rate_window_max_sec', $('rate-max').value);
+  fd.append('rate_source', $('rate-source').value);
 
   if (state.mode === 'text') {
     fd.append('prompts', $('prompts').value);
@@ -1325,28 +1375,54 @@ function showError(msg) { $('error').textContent = msg; $('error').style.display
 function renderCounts(job) {
   const cin = job.counts_in || {}, cout = job.counts_out || {};
   const names = job.class_names || [];
-  if (names.length === 0 || !job.has_line) { $('counts').style.display = 'none'; return; }
+  if (names.length === 0 || !job.has_line) {
+    $('counts').style.display = 'none';
+    $('rates-panel').style.display = 'none';
+    return;
+  }
   const showIn = $('show-in').checked;
   const showOut = $('show-out').checked;
-  if (!showIn && !showOut) { $('counts').style.display = 'none'; return; }
-  const inLbl = ($('in-label').value.trim() || 'in').toUpperCase();
-  const outLbl = ($('out-label').value.trim() || 'out').toUpperCase();
   const lineColor = $('line-color').value;
-  $('counts').style.display = 'block';
-  const grid = $('counts-grid');
-  // Columns: [swatch | clase | in? | out?]
-  const cols = ['auto', '1fr'].concat(showIn ? ['auto'] : [], showOut ? ['auto'] : []);
-  grid.style.gridTemplateColumns = cols.join(' ');
-  const sw = `<div style="width:14px;height:14px;border-radius:3px;background:${lineColor};border:1px solid var(--border);align-self:center"></div>`;
-  let html = `${sw}<div class="ch">Clase</div>`;
-  if (showIn) html += `<div class="ch in" style="text-align:right">${escapeHtml(inLbl)}</div>`;
-  if (showOut) html += `<div class="ch out" style="text-align:right">${escapeHtml(outLbl)}</div>`;
-  for (const n of names) {
-    html += `<div></div><div class="cn">${escapeHtml(n)}</div>`;
-    if (showIn) html += `<div class="cv in">${cin[n] ?? 0}</div>`;
-    if (showOut) html += `<div class="cv out">${cout[n] ?? 0}</div>`;
+  if (showIn || showOut) {
+    const inLbl = ($('in-label').value.trim() || 'in').toUpperCase();
+    const outLbl = ($('out-label').value.trim() || 'out').toUpperCase();
+    $('counts').style.display = 'block';
+    const grid = $('counts-grid');
+    const cols = ['auto', '1fr'].concat(showIn ? ['auto'] : [], showOut ? ['auto'] : []);
+    grid.style.gridTemplateColumns = cols.join(' ');
+    const sw = `<div style="width:14px;height:14px;border-radius:3px;background:${lineColor};border:1px solid var(--border);align-self:center"></div>`;
+    let html = `${sw}<div class="ch">Clase</div>`;
+    if (showIn) html += `<div class="ch in" style="text-align:right">${escapeHtml(inLbl)}</div>`;
+    if (showOut) html += `<div class="ch out" style="text-align:right">${escapeHtml(outLbl)}</div>`;
+    for (const n of names) {
+      html += `<div></div><div class="cn">${escapeHtml(n)}</div>`;
+      if (showIn) html += `<div class="cv in">${cin[n] ?? 0}</div>`;
+      if (showOut) html += `<div class="cv out">${cout[n] ?? 0}</div>`;
+    }
+    grid.innerHTML = html;
+  } else {
+    $('counts').style.display = 'none';
   }
-  grid.innerHTML = html;
+  // Rate panel below counts
+  const showRate = $('show-rate').checked;
+  const rates = job.rates || {};
+  if (showRate && Object.keys(rates).length > 0) {
+    const unit = ($('rate-unit').value === 'sec') ? 'por segundo' : 'por minuto';
+    $('rate-unit-label').textContent = unit;
+    const win = job.rate_window_seconds || 0;
+    $('rate-window-label').textContent = win > 0 ? `· ventana ${win.toFixed(1)}s` : '';
+    $('rates-panel').style.display = 'block';
+    const rgrid = $('rates-grid');
+    rgrid.style.gridTemplateColumns = 'auto 1fr auto';
+    const sw = `<div style="width:14px;height:14px;border-radius:3px;background:${lineColor};border:1px solid var(--border);align-self:center"></div>`;
+    let rhtml = `${sw}<div class="ch">Clase</div><div class="ch" style="text-align:right">tasa</div>`;
+    for (const n of names) {
+      rhtml += `<div></div><div class="cn">${escapeHtml(n)}</div><div class="cv" style="color:var(--accent)">${(rates[n] ?? 0).toFixed(1)}</div>`;
+    }
+    rgrid.innerHTML = rhtml;
+  } else {
+    $('rates-panel').style.display = 'none';
+  }
 }
 
 async function poll(jobId) {
@@ -1386,6 +1462,7 @@ updateHint();
  'show-class-name', 'show-box', 'show-mask',
  'show-legend', 'legend-corner',
  't-act', 't-lost', 't-match', 't-min', 't-ghost', 't-ghost-age',
+ 'show-rate', 'rate-unit', 'rate-source', 'rate-min', 'rate-max',
  'line-label', 'roi-label', 'line-color', 'roi-color',
  'in-label', 'out-label', 'show-in', 'show-out',
  'show-counts-overlay', 'counts-corner',

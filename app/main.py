@@ -93,6 +93,9 @@ class Job:
     frames_processed: int = 0
     counts_in: dict[str, int] = field(default_factory=dict)
     counts_out: dict[str, int] = field(default_factory=dict)
+    rates: dict[str, float] = field(default_factory=dict)
+    rate_unit: str = "min"
+    rate_window_seconds: float = 0.0
     error: str | None = None
     output_path: str | None = None
     original_filename: str = ""
@@ -297,6 +300,11 @@ async def create_job(
     minimum_consecutive_frames: int = Form(1),
     show_ghost_tracks: bool = Form(True),
     ghost_max_age: int = Form(10),
+    show_rate: bool = Form(True),
+    rate_unit: str = Form("min"),
+    rate_window_min_sec: float = Form(1.0),
+    rate_window_max_sec: float = Form(5.0),
+    rate_source: str = Form("both"),
     show_id: bool = Form(True),
     show_conf: bool = Form(True),
     line_label: str = Form(""),
@@ -355,6 +363,11 @@ async def create_job(
         minimum_matching_threshold=minimum_matching_threshold,
         minimum_consecutive_frames=minimum_consecutive_frames,
         show_ghost_tracks=show_ghost_tracks, ghost_max_age=ghost_max_age,
+        show_rate=show_rate,
+        rate_unit=rate_unit if rate_unit in ("sec", "min") else "min",
+        rate_window_min_sec=rate_window_min_sec,
+        rate_window_max_sec=rate_window_max_sec,
+        rate_source=rate_source if rate_source in ("in", "out", "both") else "both",
         show_id=show_id, show_conf=show_conf,
         line_label=line_label, roi_label=roi_label,
         line_color=line_color, roi_color=roi_color,
@@ -419,7 +432,9 @@ async def create_job(
               has_roi=cfg.roi_polygon is not None,
               original_filename=upload.filename,
               counts_in={n: 0 for n in full_names},
-              counts_out={n: 0 for n in full_names})
+              counts_out={n: 0 for n in full_names},
+              rates={n: 0.0 for n in full_names},
+              rate_unit=cfg.rate_unit)
     with LOCK:
         JOBS[job_id] = job
 
@@ -444,13 +459,16 @@ def _run_job(job_id: str, cfg: StreamConfig) -> None:
             j.frame_counter = n
             j.frames_processed = n
 
-    def on_counts(cin: dict, cout: dict):
+    def on_counts(cin: dict, cout: dict, rates: dict | None = None, window: float = 0.0):
         with LOCK:
             j = JOBS.get(job_id)
             if j is None:
                 return
             j.counts_in = cin
             j.counts_out = cout
+            if rates is not None:
+                j.rates = rates
+                j.rate_window_seconds = window
 
     try:
         result = run_stream(cfg, on_frame=on_frame, on_counts=on_counts)
@@ -461,6 +479,8 @@ def _run_job(job_id: str, cfg: StreamConfig) -> None:
             JOBS[job_id].frames_processed = result.frames_processed
             JOBS[job_id].counts_in = result.counts_in
             JOBS[job_id].counts_out = result.counts_out
+            JOBS[job_id].rates = result.rates
+            JOBS[job_id].rate_window_seconds = result.rate_window_seconds
     except Exception as exc:  # noqa: BLE001
         with LOCK:
             JOBS[job_id].status = "error"

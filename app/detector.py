@@ -47,6 +47,12 @@ class StreamConfig:
     # Ghost boxes: render last predicted position for tracks that lost detection
     show_ghost_tracks: bool = True
     ghost_max_age: int = 10
+    # Throughput rate
+    show_rate: bool = True
+    rate_unit: str = "min"        # "sec" | "min"
+    rate_window_min_sec: float = 1.0
+    rate_window_max_sec: float = 5.0
+    rate_source: str = "both"     # "in" | "out" | "both"
     # Label display options
     show_id: bool = True
     show_conf: bool = True
@@ -85,6 +91,8 @@ class DetectionResult:
     frames_processed: int
     counts_in: dict[str, int]
     counts_out: dict[str, int]
+    rates: dict[str, float] = field(default_factory=dict)
+    rate_window_seconds: float = 0.0
 
 
 def _get_model(name: str) -> YOLOE:
@@ -209,7 +217,9 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
                          cout: dict[str, int], corner: str,
                          in_label: str = "in", out_label: str = "out",
                          show_in: bool = True, show_out: bool = True,
-                         line_rgb: tuple[int, int, int] = (244, 114, 182)) -> None:
+                         line_rgb: tuple[int, int, int] = (244, 114, 182),
+                         rates: dict[str, float] | None = None,
+                         rate_unit: str = "min", rate_window: float = 0.0) -> None:
     """Draw a semi-transparent box with per-class in/out counts in a corner."""
     if not names:
         return
@@ -264,6 +274,32 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
     for i, line in enumerate(lines):
         y = y0 + pad + line_h * (i + 1) - 6
         cv2.putText(img, line, (text_x, y), font, scale, (230, 232, 235), thick, cv2.LINE_AA)
+
+    # Rate sub-box BELOW the counts box (or above if corner is BL/BR)
+    if rates is not None and names:
+        unit_str = "/min" if rate_unit == "min" else "/seg"
+        header = f"{unit_str:<11} (vent. {rate_window:.1f}s)"
+        rlines = [header] + [f"{n[:11]:<11} {rates.get(n, 0.0):>6.1f}" for n in names]
+        rwidths = [cv2.getTextSize(l, font, scale, thick)[0][0] for l in rlines]
+        rw = max(rwidths) + pad * 2
+        rh = line_h * len(rlines) + pad
+        # Position relative to the counts box
+        if corner in ("TL", "BL"):
+            rx0 = x0
+        else:
+            rx0 = x0 + w - rw
+        if corner in ("TL", "TR"):
+            ry0 = y0 + h + 6
+        else:  # BL, BR — place above so it doesn't run off the bottom
+            ry0 = y0 - rh - 6
+        # Background
+        roverlay = img.copy()
+        cv2.rectangle(roverlay, (rx0, ry0), (rx0 + rw, ry0 + rh), (12, 16, 22), -1)
+        cv2.addWeighted(roverlay, 0.65, img, 0.35, 0, dst=img)
+        cv2.rectangle(img, (rx0, ry0), (rx0 + rw, ry0 + rh), (60, 80, 100), 1)
+        for i, line in enumerate(rlines):
+            y = ry0 + pad + line_h * (i + 1) - 6
+            cv2.putText(img, line, (rx0 + pad, y), font, scale, (230, 232, 235), thick, cv2.LINE_AA)
 
 
 def extract_frame(video_path: Path, frame_index: int) -> np.ndarray:
@@ -455,6 +491,11 @@ def run_stream(
 
     counts_in: dict[str, int] = {n: 0 for n in names}
     counts_out: dict[str, int] = {n: 0 for n in names}
+    # Throughput: per-class deque of video timestamps when crossings happened
+    from collections import deque as _deque
+    event_times: dict[str, _deque] = {n: _deque() for n in names}
+    rates: dict[str, float] = {n: 0.0 for n in names}
+    current_window = 0.0
     out_fps = fr
 
     kwargs = dict(
@@ -520,20 +561,36 @@ def run_stream(
 
             if line_zone is not None:
                 in_mask, out_mask = line_zone.trigger(detections)
+                t_video = n / max(1e-6, fr)
                 if len(detections) > 0 and detections.class_id is not None:
                     for i in range(len(detections)):
                         cid = int(detections.class_id[i])
                         cname = names[cid] if cid < len(names) else f"class_{cid}"
                         if in_mask[i]:
                             counts_in[cname] = counts_in.get(cname, 0) + 1
+                            if cfg.rate_source in ("in", "both"):
+                                event_times.setdefault(cname, _deque()).append(t_video)
                         if out_mask[i]:
                             counts_out[cname] = counts_out.get(cname, 0) + 1
+                            if cfg.rate_source in ("out", "both"):
+                                event_times.setdefault(cname, _deque()).append(t_video)
+                # Rolling rate: window grows from min to max with video elapsed time
+                current_window = max(cfg.rate_window_min_sec,
+                                     min(cfg.rate_window_max_sec, t_video))
+                cutoff = t_video - current_window
+                factor = 60.0 if cfg.rate_unit == "min" else 1.0
+                for cname, dq in event_times.items():
+                    while dq and dq[0] < cutoff:
+                        dq.popleft()
+                    rates[cname] = (len(dq) / current_window) * factor if current_window > 0 else 0.0
                 scene = line_annotator.annotate(frame=scene, line_counter=line_zone)
                 if cfg.line_label:
                     pos = _line_label_pos(cfg.line, cfg.line_label_position)
                     _draw_label(scene, cfg.line_label, pos, line_rgb)
                 if on_counts is not None:
-                    on_counts(dict(counts_in), dict(counts_out))
+                    on_counts(dict(counts_in), dict(counts_out),
+                              rates=dict(rates) if cfg.show_rate else None,
+                              window=current_window if cfg.show_rate else 0.0)
 
             # Counts overlay in corner (after line so it sits on top)
             if cfg.show_counts_overlay and (line_zone is not None or roi_zone is not None):
@@ -542,6 +599,8 @@ def run_stream(
                     in_label=cfg.in_label, out_label=cfg.out_label,
                     show_in=cfg.show_in, show_out=cfg.show_out,
                     line_rgb=line_rgb,
+                    rates=rates if cfg.show_rate else None,
+                    rate_unit=cfg.rate_unit, rate_window=current_window,
                 )
 
             # Legend overlay
@@ -574,4 +633,5 @@ def run_stream(
     return DetectionResult(
         output_video=output_video, frames_processed=n,
         counts_in=counts_in, counts_out=counts_out,
+        rates=dict(rates), rate_window_seconds=current_window,
     )
