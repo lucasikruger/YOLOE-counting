@@ -7,7 +7,7 @@ services:
     image: yoloe-counting:gpu
     container_name: yoloe-counting
     ports:
-      - "8091:8000"
+      - "8001:8000"
     volumes:
       - ./data:/app/data
       - ./app:/app/app

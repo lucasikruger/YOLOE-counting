@@ -454,6 +454,7 @@ const state = {
   drawing: null,
   line: null,
   lineDrawing: null,
+  lineEndpointDrag: null,  // 'start' | 'end' when modifying an existing line
   roi: null,           // [[x,y], ...]
   roiDrawing: null,    // [[x,y], ...] in-progress
   roiCursor: null,     // [x,y] for preview line endpoint
@@ -735,7 +736,7 @@ function setTool(t) {
 }
 function updateHint() {
   const h = $('tool-hint');
-  if (state.tool === 'line') h.textContent = 'Herramienta Línea · drag para definir. El centro del bbox cruzando suma. Ctrl+Z deshace.';
+  if (state.tool === 'line') h.textContent = 'Herramienta Línea · drag para crear. Si ya hay línea, drag cerca de un extremo lo mueve; lejos no hace nada (borrá para dibujar nueva). Ctrl+Z deshace.';
   else if (state.tool === 'roi') h.textContent = 'Herramienta ROI · click para agregar vértices. Doble-click o "Cerrar polígono" para finalizar. Esc cancela.';
   else h.textContent = 'Herramienta Bbox · drag para marcar ejemplos. Alt+click borra un bbox. Ctrl+Z deshace.';
 }
@@ -939,7 +940,21 @@ svg.addEventListener('pointerdown', (e) => {
     if (state.activeClassId === null) return;
     state.drawing = { x1: p.x, y1: p.y, x2: p.x, y2: p.y, cls: state.activeClassId };
   } else if (state.tool === 'line') {
-    state.lineDrawing = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+    if (state.line) {
+      // Línea existe: drag cerca de un extremo lo mueve; lejos no hace nada.
+      const R = Math.max(state.upload.width, state.upload.height) * 0.04;
+      const d1 = Math.hypot(p.x - state.line.x1, p.y - state.line.y1);
+      const d2 = Math.hypot(p.x - state.line.x2, p.y - state.line.y2);
+      if (d1 < R || d2 < R) {
+        pushHistory();
+        state.lineEndpointDrag = d1 <= d2 ? 'start' : 'end';
+      } else {
+        // No reemplaza. Para dibujar nueva, hay que apretar "Borrar línea".
+        return;
+      }
+    } else {
+      state.lineDrawing = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+    }
   }
   renderOverlay();
 });
@@ -948,6 +963,11 @@ svg.addEventListener('pointermove', (e) => {
     const p = svgPoint(e); state.drawing.x2 = p.x; state.drawing.y2 = p.y; renderOverlay();
   } else if (state.lineDrawing) {
     const p = svgPoint(e); state.lineDrawing.x2 = p.x; state.lineDrawing.y2 = p.y; renderOverlay();
+  } else if (state.lineEndpointDrag && state.line) {
+    const p = svgPoint(e);
+    if (state.lineEndpointDrag === 'start') { state.line.x1 = p.x; state.line.y1 = p.y; }
+    else { state.line.x2 = p.x; state.line.y2 = p.y; }
+    renderOverlay();
   } else if (state.tool === 'roi' && state.roiDrawing) {
     const p = svgPoint(e); state.roiCursor = [p.x, p.y]; renderOverlay();
   }
@@ -972,6 +992,9 @@ svg.addEventListener('pointerup', (e) => {
       state.line = { x1: l.x1, y1: l.y1, x2: l.x2, y2: l.y2 };
       changed = true;
     }
+  } else if (state.lineEndpointDrag) {
+    state.lineEndpointDrag = null;
+    changed = true;
   }
   renderOverlay();
   updateRoiButtons();
