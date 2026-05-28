@@ -1,0 +1,23 @@
+services:
+  web:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: ultralytics/ultralytics:latest
+    image: yoloe-counting:gpu
+    container_name: yoloe-counting
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data:/app/data
+      - ./app:/app/app
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # Requires nvidia-container-toolkit on the host.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

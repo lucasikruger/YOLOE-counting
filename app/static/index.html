@@ -1,0 +1,1317 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>pipeline-vision · YOLOE</title>
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #12161b; --panel-2: #181d24;
+    --border: #232a33; --text: #e6e8eb; --muted: #8b95a3;
+    --accent: #6ee7b7; --accent-2: #34d399; --danger: #f87171; --warn: #fbbf24;
+    --line: #f472b6;
+    --roi: #60a5fa;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 28px 20px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; margin-bottom: 16px; }
+  label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--muted); margin-bottom: 8px; }
+  input[type="text"], textarea, select, input[type="number"] {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 9px 11px; font: inherit; outline: none;
+  }
+  textarea { min-height: 70px; resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent-2); }
+  .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 26px; text-align: center;
+    cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop.hover { border-color: var(--accent-2); background: rgba(110,231,183,0.04); }
+  .drop.compact { padding: 14px; }
+  .filename { color: var(--accent); font-family: ui-monospace, monospace; font-size: 13px; }
+
+  button { font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent-2); color: #06281b; border: 0; border-radius: 8px;
+    padding: 11px 18px; font-size: 14px; font-weight: 600; }
+  button.primary:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text);
+    border-radius: 7px; padding: 6px 11px; font-size: 13px; }
+  button.ghost:hover { border-color: var(--accent-2); }
+  button.icon { background: transparent; border: 0; color: var(--muted); padding: 2px 6px;
+    font-size: 16px; line-height: 1; }
+  button.icon:hover { color: var(--danger); }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; background: var(--panel-2);
+    padding: 4px; border-radius: 10px; border: 1px solid var(--border); width: max-content; }
+  .tab { padding: 7px 16px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--muted); }
+  .tab.active { background: var(--panel); color: var(--text); font-weight: 600; }
+
+  details { margin-top: 14px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+  details[open] summary { margin-bottom: 12px; }
+
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+  .badge.queued { background: rgba(251,191,36,0.15); color: var(--warn); }
+  .badge.processing { background: rgba(110,231,183,0.12); color: var(--accent); }
+  .badge.done { background: rgba(52,211,153,0.18); color: var(--accent-2); }
+  .badge.error { background: rgba(248,113,113,0.15); color: var(--danger); }
+  .meta { display: flex; gap: 18px; color: var(--muted); font-size: 13px; margin-top: 10px; }
+  video { width: 100%; border-radius: 8px; margin-top: 14px; background: #000; }
+  .error-box { background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.3);
+    color: var(--danger); padding: 10px 12px; border-radius: 8px;
+    font-family: ui-monospace, monospace; font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .grow { flex: 1; }
+  .actions { display: flex; gap: 12px; align-items: center; margin-top: 16px; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent);
+    border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;
+    vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .frame-wrap { position: relative; line-height: 0; background: #000;
+    border-radius: 8px; overflow: hidden; }
+  .frame-wrap img { width: 100%; height: auto; display: block; user-select: none; -webkit-user-drag: none; }
+  .frame-wrap svg { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  .frame-wrap svg.tool-bbox { cursor: crosshair; }
+  .frame-wrap svg.tool-line { cursor: crosshair; }
+  .frame-wrap svg.tool-roi { cursor: copy; }
+  .frame-wrap svg polygon { fill-opacity: 0.10; stroke-width: 2; vector-effect: non-scaling-stroke; }
+  .frame-wrap svg polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+  .frame-wrap svg rect { fill-opacity: 0.12; stroke-width: 2; vector-effect: non-scaling-stroke; }
+  .frame-wrap svg line { stroke-width: 3; vector-effect: non-scaling-stroke; }
+  .frame-wrap svg text { font-size: 14px; font-weight: 600; font-family: inherit; paint-order: stroke;
+    stroke: #000; stroke-width: 3px; stroke-linejoin: round; }
+  .frame-toolbar { display: flex; align-items: center; gap: 12px; margin-top: 10px; font-size: 13px;
+    color: var(--muted); flex-wrap: wrap; }
+  .frame-toolbar input[type=range] { flex: 1; min-width: 200px; }
+  .frame-counter { font-family: ui-monospace, monospace; min-width: 110px; text-align: right; }
+
+  .tool-group { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 2px; }
+  .tool-btn { padding: 5px 11px; border-radius: 5px; cursor: pointer; font-size: 12px;
+    color: var(--muted); background: transparent; border: 0; }
+  .tool-btn.active { background: var(--panel); color: var(--text); font-weight: 600; }
+
+  .class-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .class-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
+  .class-row.active { border-color: var(--accent-2); box-shadow: 0 0 0 1px var(--accent-2); }
+  .swatch { width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0; cursor: pointer;
+    padding: 0; border: 1px solid var(--border); background: transparent; }
+  input.swatch::-webkit-color-swatch-wrapper { padding: 0; }
+  input.swatch::-webkit-color-swatch { border: none; border-radius: 3px; }
+  .class-row input[type=text] { padding: 5px 8px; font-size: 13px; }
+  .class-row .count { color: var(--muted); font-size: 12px; min-width: 70px; text-align: right; }
+  .add-class { width: 100%; padding: 10px; border: 1px dashed var(--border); border-radius: 8px;
+    background: transparent; color: var(--muted); margin-top: 8px; }
+  .add-class:hover { border-color: var(--accent-2); color: var(--accent-2); }
+
+  .bbox-row { display: flex; align-items: center; gap: 10px; padding: 5px 10px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px; font-size: 13px; cursor: pointer; }
+  .bbox-row.current { border-color: var(--accent-2); }
+  .bbox-row .bn { font-family: ui-monospace, monospace; color: var(--muted); min-width: 28px; }
+  .bbox-row .bsw { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+  .bbox-row .thumb { width: 48px; height: 36px; border-radius: 4px; object-fit: cover;
+    background: #000; flex-shrink: 0; }
+  .bbox-row .fr { background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 6px; font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+  .bbox-row select { padding: 3px 6px; font-size: 12px; }
+  .bbox-row .coords { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; flex: 1; text-align: right; }
+
+  .fr-chip { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 10px; font-size: 12px; font-family: ui-monospace, monospace; cursor: pointer;
+    color: var(--muted); }
+  .fr-chip:hover { border-color: var(--accent-2); color: var(--text); }
+  .fr-chip.current { border-color: var(--accent-2); color: var(--accent-2); }
+
+  .counts-grid { display: grid; grid-template-columns: 1fr auto auto; gap: 6px 14px;
+    margin-top: 12px; font-size: 14px; }
+  .counts-grid .cn { color: var(--text); }
+  .counts-grid .ch { color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.04em; }
+  .counts-grid .cv { font-family: ui-monospace, monospace; font-weight: 600; text-align: right; }
+  .counts-grid .in { color: var(--accent-2); }
+  .counts-grid .out { color: var(--warn); }
+
+  .session-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    cursor: pointer; transition: border-color .15s; }
+  .session-row:hover { border-color: var(--accent-2); }
+  .session-row.current { border-color: var(--accent-2); box-shadow: 0 0 0 1px var(--accent-2); }
+  .session-row .sname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-row .sdims { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
+  .session-row .x { background: transparent; border: 0; color: var(--muted); font-size: 20px;
+    line-height: 1; padding: 2px 8px; cursor: pointer; border-radius: 6px; }
+  .session-row .x:hover { color: var(--danger); background: rgba(248,113,113,0.08); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="margin-bottom: 24px">
+    <h1>pipeline-vision</h1>
+    <div class="sub">Detección open-vocab con YOLOE · tracker + conteo por línea</div>
+  </header>
+
+  <!-- Saved sessions -->
+  <div id="sessions-card" class="card" style="display:none">
+    <label>Sesiones guardadas</label>
+    <div id="sessions-list" style="display:flex; flex-direction:column; gap:8px"></div>
+    <div class="hint">Click para reabrir · X para borrar (no se puede deshacer).</div>
+  </div>
+
+  <!-- Upload -->
+  <div class="card">
+    <label>Subir video nuevo</label>
+    <div id="drop" class="drop">
+      <div style="font-size:15px; margin-bottom:4px">Arrastrá un video o hacé click</div>
+      <div class="sub">mp4 · mov · mkv · avi</div>
+      <input id="file" type="file" accept="video/*" hidden />
+      <div id="fname" class="filename" style="margin-top:10px"></div>
+      <div id="upload-status" class="sub" style="margin-top:6px"></div>
+    </div>
+  </div>
+
+  <!-- Config -->
+  <div id="config-card" class="card" style="display:none">
+
+    <div class="tabs">
+      <div class="tab active" data-mode="text">Texto</div>
+      <div class="tab" data-mode="visual">Marcar en imagen</div>
+    </div>
+
+    <!-- Frame editor (compartido entre modos) -->
+    <label>Frame de referencia · marcá bboxes (modo visual) o línea de conteo</label>
+    <div class="frame-wrap" id="frame-wrap">
+      <img id="frame-img" alt="" />
+      <svg id="frame-svg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none" class="tool-line"></svg>
+    </div>
+    <div class="frame-toolbar">
+      <span>Frame</span>
+      <input id="frame-slider" type="range" min="0" max="0" value="0" />
+      <span class="frame-counter"><span id="frame-cur">0</span> / <span id="frame-total">0</span></span>
+
+      <div class="tool-group" id="tool-group">
+        <button type="button" class="tool-btn" data-tool="bbox" id="tool-bbox" disabled>Bbox</button>
+        <button type="button" class="tool-btn active" data-tool="line" id="tool-line">Línea</button>
+        <button type="button" class="tool-btn" data-tool="roi" id="tool-roi">ROI</button>
+      </div>
+      <button type="button" class="ghost" id="clear-line" style="display:none">Borrar línea</button>
+      <button type="button" class="ghost" id="close-roi" style="display:none">Cerrar polígono</button>
+      <button type="button" class="ghost" id="clear-roi" style="display:none">Borrar ROI</button>
+    </div>
+    <div class="hint" id="tool-hint">Modo Texto activo · solo podés dibujar línea de conteo. Drag para definirla.</div>
+
+    <div id="line-config" style="display:none; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap">
+      <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">Línea</span>
+      <input id="line-label" type="text" placeholder="Etiqueta (opcional)" style="flex:1; min-width:140px; max-width:260px" />
+      <select id="line-label-position" style="width:auto" title="Posición del label">
+        <option value="above">Arriba</option>
+        <option value="below">Abajo</option>
+        <option value="start">Inicio</option>
+        <option value="end">Fin</option>
+      </select>
+      <input id="line-color" type="color" value="#f472b6" style="width:38px; height:30px; padding:0; border:1px solid var(--border); border-radius:6px; background:transparent" />
+    </div>
+    <div id="roi-config" style="display:none; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap">
+      <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">ROI</span>
+      <input id="roi-label" type="text" placeholder="Etiqueta (opcional)" style="flex:1; min-width:140px; max-width:260px" />
+      <select id="roi-label-position" style="width:auto" title="Posición del label">
+        <option value="center">Centro</option>
+        <option value="top">Arriba</option>
+        <option value="bottom">Abajo</option>
+        <option value="left">Izq</option>
+        <option value="right">Der</option>
+      </select>
+      <input id="roi-color" type="color" value="#60a5fa" style="width:38px; height:30px; padding:0; border:1px solid var(--border); border-radius:6px; background:transparent" />
+    </div>
+
+    <!-- TEXT MODE -->
+    <div id="mode-text" style="margin-top:18px">
+      <label>Qué buscar (separado por comas)</label>
+      <textarea id="prompts" placeholder="pipe, valve, gauge, worker, helmet">box, bottle, package</textarea>
+      <div class="hint">Frases cortas en inglés: "pressure gauge" mejor que "the pressure measuring instrument".</div>
+    </div>
+
+    <!-- VISUAL MODE -->
+    <div id="mode-visual" style="display:none; margin-top:18px">
+      <label>Clases (marcá ejemplos en el frame con la herramienta Bbox)</label>
+      <div id="class-list" class="class-list"></div>
+      <button type="button" id="add-class" class="add-class">+ Nueva clase</button>
+      <div class="hint">Tip: 2-3 ejemplos por clase mejora el matching.</div>
+
+      <label style="margin-top:18px">Frames anotados (<span id="frame-anot-count">0</span>)</label>
+      <div id="frame-anot-list" style="display:flex; flex-wrap:wrap; gap:6px"></div>
+
+      <label style="margin-top:18px">Bboxes (<span id="bbox-count">0</span>)</label>
+      <div id="bbox-list" style="display:flex; flex-direction:column; gap:6px"></div>
+      <div class="hint">Click en un bbox para saltar a su frame. Cambiá la clase con el dropdown o borrá con X. Alt+click sobre el bbox en el frame también borra.<br><b>Multi-frame</b>: podés dibujar bboxes en distintos frames. Por ahora se usa como referencia el frame con más bboxes (el resto se ignora a la hora de inferir).</div>
+    </div>
+
+    <details open>
+      <summary>Opciones avanzadas</summary>
+      <div class="row">
+        <div>
+          <label>Modelo</label>
+          <select id="model">
+            <option value="yoloe-11s-seg.pt">YOLOE-11s (rápido)</option>
+            <option value="yoloe-11m-seg.pt">YOLOE-11m</option>
+            <option value="yoloe-11l-seg.pt">YOLOE-11l (preciso)</option>
+            <option value="yoloe-v8s-seg.pt">YOLOE-v8s</option>
+            <option value="yoloe-v8l-seg.pt">YOLOE-v8l</option>
+          </select>
+        </div>
+        <div>
+          <label>Confianza</label>
+          <input id="conf" type="number" min="0.05" max="0.95" step="0.05" value="0.25" />
+        </div>
+        <div>
+          <label>Frame stride</label>
+          <input id="stride" type="number" min="1" max="10" step="1" value="1" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label>Device</label>
+          <select id="device">
+            <option value="cpu">CPU</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:14px; display:flex; align-items:center; gap:10px">
+        <input id="tracker" type="checkbox" checked style="width:auto; margin:0" />
+        <label for="tracker" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+          Tracker (ByteTrack) — IDs persistentes (requerido para conteo)
+        </label>
+      </div>
+
+      <div style="margin-top:10px; display:flex; gap:20px; flex-wrap:wrap; align-items:center">
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="show-id" type="checkbox" checked style="width:auto; margin:0" />
+          <label for="show-id" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Mostrar ID
+          </label>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="show-conf" type="checkbox" checked style="width:auto; margin:0" />
+          <label for="show-conf" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Mostrar confianza
+          </label>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="show-class-name" type="checkbox" checked style="width:auto; margin:0" />
+          <label for="show-class-name" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Mostrar nombre clase
+          </label>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="show-box" type="checkbox" checked style="width:auto; margin:0" />
+          <label for="show-box" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Mostrar bbox
+          </label>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="show-mask" type="checkbox" style="width:auto; margin:0" />
+          <label for="show-mask" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Mostrar máscara (seg)
+          </label>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px">
+          <label for="bbox-label-position" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">
+            Posición label bbox:
+          </label>
+          <select id="bbox-label-position" style="width:auto">
+            <option value="TOP_LEFT">Arriba izq</option>
+            <option value="TOP_CENTER">Arriba centro</option>
+            <option value="TOP_RIGHT">Arriba der</option>
+            <option value="BOTTOM_LEFT">Abajo izq</option>
+            <option value="BOTTOM_CENTER">Abajo centro</option>
+            <option value="BOTTOM_RIGHT">Abajo der</option>
+            <option value="CENTER">Centro</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-top:12px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="show-counts-overlay" type="checkbox" style="width:auto; margin:0" />
+          <label for="show-counts-overlay" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Conteos en video
+          </label>
+        </div>
+        <select id="counts-corner" style="width:auto">
+          <option value="TL">Arriba izq</option>
+          <option value="TR">Arriba der</option>
+          <option value="BL">Abajo izq</option>
+          <option value="BR">Abajo der</option>
+        </select>
+      </div>
+
+      <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="show-legend" type="checkbox" style="width:auto; margin:0" />
+          <label for="show-legend" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Leyenda de colores
+          </label>
+        </div>
+        <select id="legend-corner" style="width:auto">
+          <option value="TL">Arriba izq</option>
+          <option value="TR" selected>Arriba der</option>
+          <option value="BL">Abajo izq</option>
+          <option value="BR">Abajo der</option>
+        </select>
+      </div>
+
+      <details style="margin-top:14px">
+        <summary>Parámetros del tracker</summary>
+        <div class="row" style="margin-top:10px">
+          <div>
+            <label title="Confianza mínima para iniciar un track nuevo">Activation threshold</label>
+            <input id="t-act" type="number" min="0.05" max="0.95" step="0.05" value="0.25" />
+          </div>
+          <div>
+            <label title="Frames que un track puede estar perdido antes de descartarse">Lost track buffer (frames)</label>
+            <input id="t-lost" type="number" min="1" max="300" step="1" value="30" />
+          </div>
+          <div>
+            <label title="IoU mínimo para matchear detección con track">Matching threshold (IoU)</label>
+            <input id="t-match" type="number" min="0.30" max="0.99" step="0.05" value="0.80" />
+          </div>
+          <div>
+            <label title="Frames consecutivos para confirmar un track nuevo">Min consecutive frames</label>
+            <input id="t-min" type="number" min="1" max="10" step="1" value="1" />
+          </div>
+        </div>
+        <div class="hint">Subí <b>min consecutive frames</b> a 2-3 si ves IDs flickering. Bajá <b>matching</b> a 0.5-0.6 si los objetos se mueven mucho entre frames.</div>
+      </details>
+    </details>
+
+    <div id="config-error" class="error-box" style="display:none"></div>
+    <div class="actions">
+      <button id="submit" class="primary" disabled>Procesar video</button>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div id="status-card" class="card" style="display:none">
+    <div style="display:flex; align-items:center; gap:12px">
+      <span id="badge" class="badge queued">queued</span>
+      <span id="status-text" class="sub"></span>
+      <div class="grow"></div>
+      <button id="cancel-view" class="ghost" style="display:none">Volver a configurar</button>
+    </div>
+    <div class="meta">
+      <span>Job: <code id="job-id"></code></span>
+      <span>Frames: <code id="frames">0</code></span>
+    </div>
+    <div id="error" class="error-box" style="display:none"></div>
+
+    <img id="live" alt="" style="display:none; width:100%; border-radius:8px; margin-top:14px; background:#000" />
+    <video id="result" controls style="display:none"></video>
+
+    <div id="counts" style="display:none; margin-top:14px">
+      <label>Conteos por clase</label>
+      <div class="counts-grid">
+        <div class="ch">Clase</div>
+        <div class="ch in" style="text-align:right">In</div>
+        <div class="ch out" style="text-align:right">Out</div>
+        <div id="counts-rows" style="display:contents"></div>
+      </div>
+    </div>
+
+    <div class="actions" id="download-row" style="display:none">
+      <a id="download" class="primary" download style="text-decoration:none">Exportar / Descargar mp4</a>
+      <button id="iterate" class="ghost">Iterar (nueva configuración)</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const PALETTE = ['#34d399', '#fbbf24', '#60a5fa', '#f472b6', '#a78bfa', '#f87171', '#fb923c', '#22d3ee'];
+
+const state = {
+  mode: 'text',
+  tool: 'line',  // 'bbox' | 'line'
+  upload: null,
+  uploadFile: null,
+  frameIndex: 0,
+  classes: [],
+  activeClassId: null,
+  bboxes: [],
+  drawing: null,
+  line: null,
+  lineDrawing: null,
+  roi: null,           // [[x,y], ...]
+  roiDrawing: null,    // [[x,y], ...] in-progress
+  roiCursor: null,     // [x,y] for preview line endpoint
+  history: [],
+};
+
+const HISTORY_MAX = 50;
+function pushHistory() {
+  state.history.push({
+    bboxes: JSON.parse(JSON.stringify(state.bboxes)),
+    line: state.line ? { ...state.line } : null,
+    roi: state.roi ? state.roi.map(p => [...p]) : null,
+  });
+  if (state.history.length > HISTORY_MAX) state.history.shift();
+}
+function undo() {
+  if (state.history.length === 0) return;
+  const s = state.history.pop();
+  state.bboxes = s.bboxes;
+  state.line = s.line;
+  state.roi = s.roi;
+  renderOverlay();
+  renderClasses();
+  updateRoiButtons();
+}
+
+// ---------- upload ----------
+const drop = $('drop'), file = $('file'), fname = $('fname'), uploadStatus = $('upload-status');
+drop.addEventListener('click', () => file.click());
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('hover'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
+drop.addEventListener('drop', (e) => {
+  e.preventDefault(); drop.classList.remove('hover');
+  if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+});
+file.addEventListener('change', (e) => { if (e.target.files.length) uploadFile(e.target.files[0]); });
+
+async function uploadFile(f) {
+  state.uploadFile = f;
+  fname.textContent = `${f.name} · ${(f.size / 1024 / 1024).toFixed(1)} MB`;
+  uploadStatus.innerHTML = '<span class="spinner"></span>Subiendo...';
+  drop.classList.add('compact');
+  const fd = new FormData(); fd.append('video', f);
+  let resp;
+  try { resp = await fetch('/api/uploads', { method: 'POST', body: fd }); }
+  catch (err) { uploadStatus.textContent = `Error: ${err.message}`; return; }
+  if (!resp.ok) { uploadStatus.textContent = `Error ${resp.status}: ${await resp.text()}`; return; }
+  state.upload = await resp.json();
+  uploadStatus.textContent = `${state.upload.width}×${state.upload.height} · ${state.upload.total_frames} frames · ${state.upload.fps.toFixed(1)} fps`;
+  await openUpload(state.upload, /*fromList=*/false);
+  refreshSessions();
+}
+
+async function openUpload(upload, fromList) {
+  state.upload = upload;
+  $('config-card').style.display = 'block';
+  $('submit').disabled = false;
+  $('frame-slider').max = Math.max(0, upload.total_frames - 1);
+  $('frame-total').textContent = upload.total_frames;
+  // Reset transient state
+  state.drawing = null; state.lineDrawing = null;
+  state.roiDrawing = null; state.roiCursor = null;
+  state.history = [];
+  // Try to restore saved session
+  let session = {};
+  try {
+    const r = await fetch(`/api/uploads/${upload.upload_id}/session`);
+    if (r.ok) session = await r.json();
+  } catch { /* ignore */ }
+  applySession(session);
+  showFrame(state.frameIndex || 0);
+  $('frame-slider').value = state.frameIndex || 0;
+  $('frame-cur').textContent = state.frameIndex || 0;
+  highlightCurrent(upload.upload_id);
+}
+
+function applySession(s) {
+  state.mode = s.mode || 'text';
+  state.classes = (s.classes && s.classes.length) ? s.classes.map(c => ({...c})) : [];
+  if (state.classes.length === 0) addClassSilent();
+  state.activeClassId = (s.active_class_id != null) ? s.active_class_id : state.classes[0]?.id;
+  state.bboxes = (s.bboxes || []).map(b => ({...b}));
+  state.line = s.line ? {...s.line} : null;
+  state.roi = (s.roi && s.roi.length >= 3) ? s.roi.map(p => [...p]) : null;
+  state.frameIndex = s.frame_index || 0;
+  // Form values
+  if (s.prompts != null) $('prompts').value = s.prompts;
+  if (s.model) $('model').value = s.model;
+  if (s.conf != null) $('conf').value = s.conf;
+  if (s.stride != null) $('stride').value = s.stride;
+  if (s.device) $('device').value = s.device;
+  if (s.use_tracker != null) $('tracker').checked = !!s.use_tracker;
+  if (s.show_id != null) $('show-id').checked = !!s.show_id;
+  if (s.show_conf != null) $('show-conf').checked = !!s.show_conf;
+  $('line-label').value = s.line_label || '';
+  $('roi-label').value = s.roi_label || '';
+  $('line-color').value = s.line_color || '#f472b6';
+  $('roi-color').value = s.roi_color || '#60a5fa';
+  $('show-counts-overlay').checked = !!s.show_counts_overlay;
+  $('counts-corner').value = s.counts_corner || 'TL';
+  $('bbox-label-position').value = s.bbox_label_position || 'TOP_LEFT';
+  $('line-label-position').value = s.line_label_position || 'above';
+  $('roi-label-position').value = s.roi_label_position || 'center';
+  $('show-class-name').checked = s.show_class_name !== false;  // default true
+  $('show-box').checked = s.show_box !== false;
+  $('show-mask').checked = !!s.show_mask;
+  $('show-legend').checked = !!s.show_legend;
+  $('legend-corner').value = s.legend_corner || 'TR';
+  const t = s.tracker_params || {};
+  if (t.act != null) $('t-act').value = t.act;
+  if (t.lost != null) $('t-lost').value = t.lost;
+  if (t.match != null) $('t-match').value = t.match;
+  if (t.min != null) $('t-min').value = t.min;
+  // Update UI
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.mode === state.mode));
+  $('mode-text').style.display = state.mode === 'text' ? 'block' : 'none';
+  $('mode-visual').style.display = state.mode === 'visual' ? 'block' : 'none';
+  $('tool-bbox').disabled = state.mode !== 'visual';
+  renderClasses();
+  renderOverlay();
+  updateRoiButtons();
+}
+
+function snapshotSession() {
+  return {
+    mode: state.mode,
+    classes: state.classes,
+    active_class_id: state.activeClassId,
+    bboxes: state.bboxes,
+    line: state.line,
+    roi: state.roi,
+    frame_index: state.frameIndex,
+    prompts: $('prompts').value,
+    model: $('model').value,
+    conf: +$('conf').value,
+    stride: +$('stride').value,
+    device: $('device').value,
+    use_tracker: $('tracker').checked,
+    show_id: $('show-id').checked,
+    show_conf: $('show-conf').checked,
+    line_label: $('line-label').value,
+    roi_label: $('roi-label').value,
+    line_color: $('line-color').value,
+    roi_color: $('roi-color').value,
+    show_counts_overlay: $('show-counts-overlay').checked,
+    counts_corner: $('counts-corner').value,
+    bbox_label_position: $('bbox-label-position').value,
+    line_label_position: $('line-label-position').value,
+    roi_label_position: $('roi-label-position').value,
+    show_class_name: $('show-class-name').checked,
+    show_box: $('show-box').checked,
+    show_mask: $('show-mask').checked,
+    show_legend: $('show-legend').checked,
+    legend_corner: $('legend-corner').value,
+    tracker_params: {
+      act: +$('t-act').value, lost: +$('t-lost').value,
+      match: +$('t-match').value, min: +$('t-min').value,
+    },
+  };
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  if (!state.upload) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      await fetch(`/api/uploads/${state.upload.upload_id}/session`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapshotSession()),
+      });
+    } catch { /* ignore */ }
+  }, 500);
+}
+
+async function refreshSessions() {
+  let items = [];
+  try {
+    const r = await fetch('/api/uploads');
+    if (r.ok) items = await r.json();
+  } catch { return; }
+  const card = $('sessions-card');
+  const list = $('sessions-list');
+  list.innerHTML = '';
+  if (items.length === 0) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  items.forEach(u => {
+    const row = document.createElement('div');
+    row.className = 'session-row' + (state.upload && state.upload.upload_id === u.upload_id ? ' current' : '');
+    row.dataset.id = u.upload_id;
+    row.innerHTML = `
+      <div class="sname">${escapeHtml(u.filename)}</div>
+      <div class="sdims">${u.width}×${u.height} · ${u.total_frames}f · ${u.fps.toFixed(0)}fps</div>
+      <button type="button" class="x" title="Borrar">×</button>`;
+    const [, , x] = row.children;
+    row.addEventListener('click', (e) => {
+      if (e.target === x) return;
+      openUpload(u, true);
+    });
+    x.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Borrar ${u.filename}?`)) return;
+      try { await fetch(`/api/uploads/${u.upload_id}`, { method: 'DELETE' }); }
+      catch { return; }
+      if (state.upload && state.upload.upload_id === u.upload_id) {
+        state.upload = null;
+        $('config-card').style.display = 'none';
+        $('submit').disabled = true;
+      }
+      refreshSessions();
+    });
+    list.appendChild(row);
+  });
+}
+
+function highlightCurrent(id) {
+  document.querySelectorAll('.session-row').forEach(r => {
+    r.classList.toggle('current', r.dataset.id === id);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+async function reuploadIfNeeded() {
+  if (!state.uploadFile) return false;
+  const fd = new FormData(); fd.append('video', state.uploadFile);
+  const r = await fetch('/api/uploads', { method: 'POST', body: fd });
+  if (!r.ok) return false;
+  state.upload = await r.json();
+  return true;
+}
+
+function showConfigError(msg) {
+  const e = $('config-error');
+  e.textContent = msg; e.style.display = 'block';
+}
+function clearConfigError() { $('config-error').style.display = 'none'; }
+
+// ---------- mode tabs ----------
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  state.mode = t.dataset.mode;
+  $('mode-text').style.display = state.mode === 'text' ? 'block' : 'none';
+  $('mode-visual').style.display = state.mode === 'visual' ? 'block' : 'none';
+  $('tool-bbox').disabled = state.mode !== 'visual';
+  if (state.mode !== 'visual' && state.tool === 'bbox') setTool('line');
+  updateHint();
+  scheduleSave();
+}));
+
+// ---------- tools ----------
+document.querySelectorAll('.tool-btn').forEach(b => b.addEventListener('click', () => {
+  if (b.disabled) return;
+  setTool(b.dataset.tool);
+}));
+function setTool(t) {
+  state.tool = t;
+  document.querySelectorAll('.tool-btn').forEach(x => x.classList.toggle('active', x.dataset.tool === t));
+  const svg = $('frame-svg');
+  svg.classList.remove('tool-bbox', 'tool-line', 'tool-roi');
+  svg.classList.add(`tool-${t}`);
+  // Cancel in-progress ROI when leaving tool
+  if (t !== 'roi') { state.roiDrawing = null; state.roiCursor = null; }
+  updateHint();
+  updateRoiButtons();
+  $('clear-line').style.display = (t === 'line' && state.line) ? 'inline-block' : 'none';
+  renderOverlay();
+}
+function updateHint() {
+  const h = $('tool-hint');
+  if (state.tool === 'line') h.textContent = 'Herramienta Línea · drag para definir. El centro del bbox cruzando suma. Ctrl+Z deshace.';
+  else if (state.tool === 'roi') h.textContent = 'Herramienta ROI · click para agregar vértices. Doble-click o "Cerrar polígono" para finalizar. Esc cancela.';
+  else h.textContent = 'Herramienta Bbox · drag para marcar ejemplos. Alt+click borra un bbox. Ctrl+Z deshace.';
+}
+function updateRoiButtons() {
+  const isRoiTool = state.tool === 'roi';
+  $('close-roi').style.display = (isRoiTool && state.roiDrawing && state.roiDrawing.length >= 3) ? 'inline-block' : 'none';
+  $('clear-roi').style.display = (isRoiTool && state.roi) ? 'inline-block' : 'none';
+  $('clear-line').style.display = (state.tool === 'line' && state.line) ? 'inline-block' : 'none';
+  // Mostrar config (label/color) cuando la entidad existe o el tool está activo
+  $('line-config').style.display = (state.line || state.tool === 'line') ? 'flex' : 'none';
+  $('roi-config').style.display = (state.roi || state.tool === 'roi') ? 'flex' : 'none';
+}
+
+$('clear-line').addEventListener('click', () => {
+  if (state.line) { pushHistory(); state.line = null; renderOverlay(); scheduleSave(); }
+  $('clear-line').style.display = 'none';
+});
+$('close-roi').addEventListener('click', closeRoi);
+$('clear-roi').addEventListener('click', () => {
+  if (state.roi) { pushHistory(); state.roi = null; renderOverlay(); updateRoiButtons(); scheduleSave(); }
+});
+
+function closeRoi() {
+  if (!state.roiDrawing || state.roiDrawing.length < 3) return;
+  pushHistory();
+  state.roi = state.roiDrawing;
+  state.roiDrawing = null;
+  state.roiCursor = null;
+  renderOverlay();
+  updateRoiButtons();
+  scheduleSave();
+}
+
+// ---------- frame slider ----------
+$('frame-slider').addEventListener('input', (e) => {
+  state.frameIndex = +e.target.value;
+  $('frame-cur').textContent = state.frameIndex;
+  showFrame(state.frameIndex);
+  renderBboxList();   // refresh current/frame highlight + counts
+  scheduleSave();
+});
+function showFrame(idx) {
+  if (!state.upload) return;
+  const img = $('frame-img');
+  img.onload = () => {
+    const svg = $('frame-svg');
+    svg.setAttribute('viewBox', `0 0 ${state.upload.width} ${state.upload.height}`);
+    renderOverlay();
+  };
+  img.src = `/api/uploads/${state.upload.upload_id}/frame?index=${idx}&_=${Date.now()}`;
+}
+
+// ---------- classes ----------
+function addClass(silent) {
+  const id = state.classes.length;
+  state.classes.push({ id, name: id === 0 ? '' : `clase_${id+1}`, color: PALETTE[id % PALETTE.length] });
+  state.activeClassId = id;
+  renderClasses();
+  if (!silent) scheduleSave();
+}
+function addClassSilent() { addClass(true); }
+$('add-class').addEventListener('click', () => addClass(false));
+
+function renderClasses() {
+  renderBboxList();
+  const list = $('class-list');
+  list.innerHTML = '';
+  state.classes.forEach(c => {
+    const count = state.bboxes.filter(b => b.cls === c.id).length;
+    const row = document.createElement('div');
+    row.className = 'class-row' + (c.id === state.activeClassId ? ' active' : '');
+    row.innerHTML = `
+      <input type="color" class="swatch" value="${c.color}" title="Cambiar color" />
+      <input type="text" placeholder="nombre (ej: valve)" value="${escapeAttr(c.name)}" />
+      <div class="count">${count} ${count === 1 ? 'ejemplo' : 'ejemplos'}</div>
+      <button type="button" class="icon">×</button>`;
+    const [swatch, input, _count, del] = row.children;
+    swatch.addEventListener('input', (e) => {
+      c.color = e.target.value;
+      renderClasses(); renderOverlay(); scheduleSave();
+    });
+    row.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target === del) return;
+      state.activeClassId = c.id; renderClasses();
+    });
+    input.addEventListener('input', (e) => { c.name = e.target.value; scheduleSave(); });
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pushHistory();
+      state.classes = state.classes.filter(x => x.id !== c.id);
+      state.bboxes = state.bboxes.filter(b => b.cls !== c.id);
+      if (state.activeClassId === c.id) state.activeClassId = state.classes[0]?.id ?? null;
+      renderClasses(); renderOverlay(); scheduleSave();
+    });
+    list.appendChild(row);
+  });
+}
+function escapeAttr(s) { return String(s).replace(/"/g, '&quot;'); }
+
+function renderBboxList() {
+  const list = $('bbox-list');
+  $('bbox-count').textContent = state.bboxes.length;
+  list.innerHTML = '';
+  state.bboxes.forEach((b, i) => {
+    const bFrame = b.frame_index ?? 0;
+    const row = document.createElement('div');
+    row.className = 'bbox-row' + (bFrame === state.frameIndex ? ' current' : '');
+    const opts = state.classes.map(c =>
+      `<option value="${c.id}" ${c.id === b.cls ? 'selected' : ''}>${escapeHtml(c.name?.trim() || `clase_${c.id+1}`)}</option>`
+    ).join('');
+    const cropUrl = `/api/uploads/${state.upload.upload_id}/crop?frame=${bFrame}&x1=${Math.round(b.x1)}&y1=${Math.round(b.y1)}&x2=${Math.round(b.x2)}&y2=${Math.round(b.y2)}`;
+    row.innerHTML = `
+      <div class="bn">#${i+1}</div>
+      <div class="bsw" style="background:${classColor(b.cls)}"></div>
+      <img class="thumb" loading="lazy" src="${cropUrl}" alt="" />
+      <div class="fr" title="Saltar al frame ${bFrame}">f${bFrame}</div>
+      <select>${opts}</select>
+      <div class="coords">${Math.round(b.x1)},${Math.round(b.y1)} → ${Math.round(b.x2)},${Math.round(b.y2)}</div>
+      <button type="button" class="x" title="Borrar">×</button>`;
+    const [, , , fr, sel, , del] = row.children;
+    sel.addEventListener('click', e => e.stopPropagation());
+    sel.addEventListener('change', (e) => {
+      pushHistory();
+      b.cls = +e.target.value;
+      renderOverlay(); renderClasses(); renderBboxList(); scheduleSave();
+    });
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pushHistory();
+      state.bboxes.splice(i, 1);
+      renderOverlay(); renderClasses(); renderBboxList(); scheduleSave();
+    });
+    fr.addEventListener('click', (e) => { e.stopPropagation(); jumpToFrame(bFrame); });
+    row.addEventListener('click', () => jumpToFrame(bFrame));
+    row.addEventListener('mouseenter', () => highlightBbox(i, true));
+    row.addEventListener('mouseleave', () => highlightBbox(i, false));
+    list.appendChild(row);
+  });
+  renderFrameList();
+}
+
+function renderFrameList() {
+  const ul = $('frame-anot-list');
+  const counts = new Map();
+  state.bboxes.forEach(b => {
+    const f = b.frame_index ?? 0;
+    counts.set(f, (counts.get(f) || 0) + 1);
+  });
+  const frames = [...counts.keys()].sort((a, b) => a - b);
+  $('frame-anot-count').textContent = frames.length;
+  ul.innerHTML = '';
+  frames.forEach(f => {
+    const chip = document.createElement('div');
+    chip.className = 'fr-chip' + (f === state.frameIndex ? ' current' : '');
+    chip.textContent = `f${f} · ${counts.get(f)}`;
+    chip.addEventListener('click', () => jumpToFrame(f));
+    ul.appendChild(chip);
+  });
+}
+
+function jumpToFrame(f) {
+  state.frameIndex = f;
+  $('frame-slider').value = f;
+  $('frame-cur').textContent = f;
+  showFrame(f);
+  scheduleSave();
+}
+
+function highlightBbox(i, on) {
+  const g = svg.querySelector(`g[data-i="${i}"] rect`);
+  if (g) {
+    g.style.strokeWidth = on ? '5' : '';
+    g.style.fillOpacity = on ? '0.30' : '';
+  }
+}
+
+// ---------- drawing on SVG ----------
+const svg = $('frame-svg');
+function svgPoint(evt) {
+  const r = svg.getBoundingClientRect();
+  const xR = state.upload.width / r.width;
+  const yR = state.upload.height / r.height;
+  return {
+    x: Math.max(0, Math.min(state.upload.width, (evt.clientX - r.left) * xR)),
+    y: Math.max(0, Math.min(state.upload.height, (evt.clientY - r.top) * yR)),
+  };
+}
+svg.addEventListener('pointerdown', (e) => {
+  if (state.tool === 'roi') return;  // ROI usa click/mousemove en vez de drag
+  e.preventDefault();
+  svg.setPointerCapture(e.pointerId);
+  const p = svgPoint(e);
+  if (state.tool === 'bbox') {
+    if (state.activeClassId === null) return;
+    state.drawing = { x1: p.x, y1: p.y, x2: p.x, y2: p.y, cls: state.activeClassId };
+  } else if (state.tool === 'line') {
+    state.lineDrawing = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+  }
+  renderOverlay();
+});
+svg.addEventListener('pointermove', (e) => {
+  if (state.drawing) {
+    const p = svgPoint(e); state.drawing.x2 = p.x; state.drawing.y2 = p.y; renderOverlay();
+  } else if (state.lineDrawing) {
+    const p = svgPoint(e); state.lineDrawing.x2 = p.x; state.lineDrawing.y2 = p.y; renderOverlay();
+  } else if (state.tool === 'roi' && state.roiDrawing) {
+    const p = svgPoint(e); state.roiCursor = [p.x, p.y]; renderOverlay();
+  }
+});
+svg.addEventListener('pointerup', (e) => {
+  let changed = false;
+  if (state.drawing) {
+    const b = state.drawing; state.drawing = null;
+    const x1 = Math.min(b.x1, b.x2), x2 = Math.max(b.x1, b.x2);
+    const y1 = Math.min(b.y1, b.y2), y2 = Math.max(b.y1, b.y2);
+    if (x2 - x1 > 5 && y2 - y1 > 5) {
+      pushHistory();
+      state.bboxes.push({ x1, y1, x2, y2, cls: b.cls, frame_index: state.frameIndex });
+      changed = true;
+    }
+    renderClasses();
+  } else if (state.lineDrawing) {
+    const l = state.lineDrawing; state.lineDrawing = null;
+    const dx = l.x2 - l.x1, dy = l.y2 - l.y1;
+    if (Math.hypot(dx, dy) > 10) {
+      pushHistory();
+      state.line = { x1: l.x1, y1: l.y1, x2: l.x2, y2: l.y2 };
+      changed = true;
+    }
+  }
+  renderOverlay();
+  updateRoiButtons();
+  if (changed) scheduleSave();
+});
+
+svg.addEventListener('click', (e) => {
+  if (state.tool === 'roi') {
+    if (state.roi) return;  // primero borrar ROI existente
+    const p = svgPoint(e);
+    if (!state.roiDrawing) state.roiDrawing = [];
+    state.roiDrawing.push([p.x, p.y]);
+    state.roiCursor = [p.x, p.y];
+    renderOverlay(); updateRoiButtons();
+    return;
+  }
+  if (!e.altKey) return;
+  const g = e.target.closest('g[data-i]');
+  if (!g) return;
+  pushHistory();
+  state.bboxes.splice(+g.dataset.i, 1);
+  renderOverlay(); renderClasses(); scheduleSave();
+});
+
+svg.addEventListener('dblclick', (e) => {
+  if (state.tool === 'roi') { e.preventDefault(); closeRoi(); }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && state.roiDrawing) {
+    state.roiDrawing = null; state.roiCursor = null;
+    renderOverlay(); updateRoiButtons();
+  }
+});
+
+// Ctrl/Cmd+Z (excluyendo inputs de texto)
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.shiftKey) return;
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+  e.preventDefault();
+  undo();
+});
+
+function classColor(cid) { return state.classes.find(c => c.id === cid)?.color ?? '#fff'; }
+function className(cid) { return state.classes.find(c => c.id === cid)?.name?.trim() || `clase_${cid+1}`; }
+
+function bboxLabelPos(b, pos) {
+  const cx = (b.x1 + b.x2) / 2;
+  const cy = (b.y1 + b.y2) / 2;
+  switch (pos) {
+    case 'TOP_CENTER':    return [cx,    b.y1 - 6,  'middle'];
+    case 'TOP_RIGHT':     return [b.x2,  b.y1 - 6,  'end'];
+    case 'BOTTOM_LEFT':   return [b.x1+4, b.y2 + 16, 'start'];
+    case 'BOTTOM_CENTER': return [cx,    b.y2 + 16, 'middle'];
+    case 'BOTTOM_RIGHT':  return [b.x2-4, b.y2 + 16, 'end'];
+    case 'CENTER':        return [cx,    cy,        'middle'];
+    default:              return [b.x1+4, b.y1 - 6, 'start'];  // TOP_LEFT
+  }
+}
+function lineLabelPos(l, pos) {
+  const mx = (l.x1 + l.x2) / 2, my = (l.y1 + l.y2) / 2;
+  if (pos === 'below') return [mx, my + 18, 'middle'];
+  if (pos === 'start') return [l.x1, l.y1 - 12, 'middle'];
+  if (pos === 'end')   return [l.x2, l.y2 - 12, 'middle'];
+  return [mx, my - 14, 'middle'];  // above
+}
+function roiLabelPos(poly, pos) {
+  const xs = poly.map(p => p[0]), ys = poly.map(p => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const cx = xs.reduce((a,b)=>a+b,0)/xs.length, cy = ys.reduce((a,b)=>a+b,0)/ys.length;
+  if (pos === 'top')    return [cx, minY + 14, 'middle'];
+  if (pos === 'bottom') return [cx, maxY - 8,  'middle'];
+  if (pos === 'left')   return [minX + 30, cy, 'start'];
+  if (pos === 'right')  return [maxX - 30, cy, 'end'];
+  return [cx, cy, 'middle'];
+}
+
+function renderOverlay() {
+  if (!state.upload) return;
+  const parts = [];
+  // bboxes (sólo del frame actual)
+  const bboxPos = $('bbox-label-position').value;
+  state.bboxes.forEach((b, i) => {
+    const bFrame = b.frame_index ?? 0;
+    if (bFrame !== state.frameIndex) return;
+    const col = classColor(b.cls);
+    const [lx, ly, anchor] = bboxLabelPos(b, bboxPos);
+    parts.push(`<g data-i="${i}">
+      <rect x="${b.x1}" y="${b.y1}" width="${b.x2-b.x1}" height="${b.y2-b.y1}" fill="${col}" stroke="${col}" />
+      <text x="${lx}" y="${ly}" text-anchor="${anchor}" fill="${col}">#${i+1} ${className(b.cls)}</text>
+    </g>`);
+  });
+  // drawing bbox
+  if (state.drawing) {
+    const d = state.drawing, col = classColor(d.cls);
+    const x1 = Math.min(d.x1, d.x2), y1 = Math.min(d.y1, d.y2);
+    const w = Math.abs(d.x2 - d.x1), h = Math.abs(d.y2 - d.y1);
+    parts.push(`<rect x="${x1}" y="${y1}" width="${w}" height="${h}" fill="${col}" stroke="${col}" stroke-dasharray="6 3" />`);
+  }
+  // line
+  if (state.line) {
+    const lc = $('line-color').value;
+    parts.push(`<line x1="${state.line.x1}" y1="${state.line.y1}" x2="${state.line.x2}" y2="${state.line.y2}" stroke="${lc}" />`);
+    parts.push(`<circle cx="${state.line.x1}" cy="${state.line.y1}" r="6" fill="${lc}"/>`);
+    parts.push(`<circle cx="${state.line.x2}" cy="${state.line.y2}" r="6" fill="${lc}"/>`);
+    const ll = $('line-label').value.trim();
+    if (ll) {
+      const [lx, ly, anc] = lineLabelPos(state.line, $('line-label-position').value);
+      parts.push(`<text x="${lx}" y="${ly}" text-anchor="${anc}" fill="${lc}">${escapeHtml(ll)}</text>`);
+    }
+  }
+  if (state.lineDrawing) {
+    const l = state.lineDrawing;
+    parts.push(`<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${$('line-color').value}" stroke-dasharray="6 3" />`);
+  }
+  // ROI closed
+  if (state.roi) {
+    const rc = $('roi-color').value;
+    const pts = state.roi.map(p => `${p[0]},${p[1]}`).join(' ');
+    parts.push(`<polygon points="${pts}" fill="${rc}" stroke="${rc}" />`);
+    const rl = $('roi-label').value.trim();
+    if (rl) {
+      const [rx, ry, anc] = roiLabelPos(state.roi, $('roi-label-position').value);
+      parts.push(`<text x="${rx}" y="${ry}" text-anchor="${anc}" fill="${rc}">${escapeHtml(rl)}</text>`);
+    }
+  }
+  // ROI in-progress
+  if (state.roiDrawing && state.roiDrawing.length > 0) {
+    const drawn = state.roiDrawing.map(p => `${p[0]},${p[1]}`).join(' ');
+    parts.push(`<polyline points="${drawn}" stroke="${$('roi-color').value}" />`);
+    state.roiDrawing.forEach(p => {
+      parts.push(`<circle cx="${p[0]}" cy="${p[1]}" r="5" fill="${$('roi-color').value}"/>`);
+    });
+    if (state.roiCursor) {
+      const last = state.roiDrawing[state.roiDrawing.length - 1];
+      parts.push(`<line x1="${last[0]}" y1="${last[1]}" x2="${state.roiCursor[0]}" y2="${state.roiCursor[1]}" stroke="${$('roi-color').value}" stroke-dasharray="6 3" />`);
+      // preview close line
+      if (state.roiDrawing.length >= 2) {
+        const first = state.roiDrawing[0];
+        parts.push(`<line x1="${state.roiCursor[0]}" y1="${state.roiCursor[1]}" x2="${first[0]}" y2="${first[1]}" stroke="${$('roi-color').value}" stroke-dasharray="2 4" stroke-opacity="0.5" />`);
+      }
+    }
+  }
+  svg.innerHTML = parts.join('');
+}
+
+// ---------- submit ----------
+function buildJobForm() {
+  const fd = new FormData();
+  fd.append('upload_id', state.upload.upload_id);
+  fd.append('mode', state.mode);
+  fd.append('model', $('model').value);
+  fd.append('conf', $('conf').value);
+  fd.append('stride', $('stride').value);
+  fd.append('device', $('device').value);
+  fd.append('use_tracker', $('tracker').checked ? 'true' : 'false');
+  fd.append('show_id', $('show-id').checked ? 'true' : 'false');
+  fd.append('show_conf', $('show-conf').checked ? 'true' : 'false');
+  fd.append('line_label', $('line-label').value);
+  fd.append('roi_label', $('roi-label').value);
+  fd.append('line_color', $('line-color').value);
+  fd.append('roi_color', $('roi-color').value);
+  fd.append('show_counts_overlay', $('show-counts-overlay').checked ? 'true' : 'false');
+  fd.append('counts_corner', $('counts-corner').value);
+  fd.append('bbox_label_position', $('bbox-label-position').value);
+  fd.append('line_label_position', $('line-label-position').value);
+  fd.append('roi_label_position', $('roi-label-position').value);
+  fd.append('show_class_name', $('show-class-name').checked ? 'true' : 'false');
+  fd.append('show_box', $('show-box').checked ? 'true' : 'false');
+  fd.append('show_mask', $('show-mask').checked ? 'true' : 'false');
+  fd.append('show_legend', $('show-legend').checked ? 'true' : 'false');
+  fd.append('legend_corner', $('legend-corner').value);
+  // class_colors aligned with unique cls ids (sequential 0..N-1 after remap)
+  if (state.mode === 'visual') {
+    const usedIds = [...new Set(state.bboxes.map(b => b.cls))].sort((a,b)=>a-b);
+    fd.append('class_colors', usedIds.map(cid => classColor(cid)).join(','));
+    // Per-bbox frame index for multi-frame visual prompts
+    fd.append('bbox_frames', JSON.stringify(state.bboxes.map(b => b.frame_index ?? 0)));
+  } else {
+    fd.append('class_colors', state.classes.map(c => c.color).join(','));
+  }
+  fd.append('frame_index', state.frameIndex);
+  if (state.line) {
+    fd.append('line', JSON.stringify([state.line.x1, state.line.y1, state.line.x2, state.line.y2]));
+  }
+  if (state.roi) {
+    fd.append('roi', JSON.stringify(state.roi));
+  }
+  // Tracker params
+  fd.append('track_activation_threshold', $('t-act').value);
+  fd.append('lost_track_buffer', $('t-lost').value);
+  fd.append('minimum_matching_threshold', $('t-match').value);
+  fd.append('minimum_consecutive_frames', $('t-min').value);
+
+  if (state.mode === 'text') {
+    fd.append('prompts', $('prompts').value);
+  } else {
+    const usedIds = [...new Set(state.bboxes.map(b => b.cls))].sort((a,b)=>a-b);
+    const remap = Object.fromEntries(usedIds.map((cid, i) => [cid, i]));
+    fd.append('bboxes', JSON.stringify(state.bboxes.map(b => [b.x1, b.y1, b.x2, b.y2])));
+    fd.append('cls', JSON.stringify(state.bboxes.map(b => remap[b.cls])));
+    fd.append('class_names', usedIds.map(cid => className(cid)).join(','));
+  }
+  return fd;
+}
+
+$('submit').addEventListener('click', async () => {
+  if (!state.upload) return;
+  clearConfigError();
+  const submit = $('submit'); submit.disabled = true;
+  $('error').style.display = 'none';
+  $('result').style.display = 'none';
+  $('download-row').style.display = 'none';
+  $('live').style.display = 'none'; $('live').src = '';
+  $('counts').style.display = 'none'; $('counts-rows').innerHTML = '';
+
+  // Client-side validation con error visible
+  if (state.mode === 'text' && !$('prompts').value.trim()) {
+    showConfigError('Escribí al menos un prompt.'); submit.disabled = false; return;
+  }
+  if (state.mode === 'visual' && state.bboxes.length === 0) {
+    showConfigError('Dibujá al menos un bbox con la herramienta Bbox.'); submit.disabled = false; return;
+  }
+
+  let resp;
+  try { resp = await fetch('/api/jobs', { method: 'POST', body: buildJobForm() }); }
+  catch (err) { showConfigError(`Error de red: ${err.message}`); submit.disabled = false; return; }
+
+  // Si el upload se perdió (ej. backend reiniciado), re-uploadeamos y reintentamos
+  if (resp.status === 404) {
+    const body = await resp.text();
+    if (body.includes('Upload not found')) {
+      showConfigError('Re-subiendo video (el backend se reinició)...');
+      const ok = await reuploadIfNeeded();
+      if (!ok) { showConfigError('No pude re-subir el video. Recargá la página y volvé a subirlo.'); submit.disabled = false; return; }
+      try { resp = await fetch('/api/jobs', { method: 'POST', body: buildJobForm() }); }
+      catch (err) { showConfigError(`Error de red al reintentar: ${err.message}`); submit.disabled = false; return; }
+    }
+  }
+  if (!resp.ok) { showConfigError(`Error ${resp.status}: ${await resp.text()}`); submit.disabled = false; return; }
+  clearConfigError();
+
+  const { job_id } = await resp.json();
+  $('status-card').style.display = 'block';
+  $('config-card').style.display = 'none';
+  $('job-id').textContent = job_id;
+  setStatus('queued', 'Iniciando...');
+  $('live').src = `/api/jobs/${job_id}/stream?_=${Date.now()}`;
+  $('live').style.display = 'block';
+  $('cancel-view').style.display = 'inline-block';
+  poll(job_id);
+});
+
+let activeJobId = null;
+function resetToConfig() {
+  activeJobId = null;            // detiene loops de polling viejos
+  $('status-card').style.display = 'none';
+  $('config-card').style.display = 'block';
+  $('live').src = ''; $('result').src = '';
+  $('counts').style.display = 'none'; $('counts-rows').innerHTML = '';
+  $('frames').textContent = '0';
+  $('error').style.display = 'none';
+  $('badge').className = 'badge queued'; $('badge').textContent = 'queued';
+  $('status-text').textContent = '';
+  $('submit').disabled = false;
+}
+$('cancel-view').addEventListener('click', resetToConfig);
+$('iterate').addEventListener('click', resetToConfig);
+
+// ---------- status + counts ----------
+function setStatus(s, text) {
+  $('badge').className = `badge ${s}`; $('badge').textContent = s;
+  $('status-text').innerHTML = (s === 'processing' ? '<span class="spinner"></span>' : '') + text;
+}
+function showError(msg) { $('error').textContent = msg; $('error').style.display = 'block'; }
+
+function renderCounts(job) {
+  const cin = job.counts_in || {}, cout = job.counts_out || {};
+  const names = job.class_names || [];
+  if (names.length === 0 || !job.has_line) { $('counts').style.display = 'none'; return; }
+  $('counts').style.display = 'block';
+  const rows = names.map(n => `
+    <div class="cn">${n}</div>
+    <div class="cv in">${cin[n] ?? 0}</div>
+    <div class="cv out">${cout[n] ?? 0}</div>
+  `).join('');
+  $('counts-rows').innerHTML = rows;
+}
+
+async function poll(jobId) {
+  activeJobId = jobId;
+  while (true) {
+    if (activeJobId !== jobId) return;   // superseded: otro job arrancó o se canceló
+    await new Promise(r => setTimeout(r, 1500));
+    if (activeJobId !== jobId) return;
+    let job;
+    try { const r = await fetch(`/api/jobs/${jobId}`); job = await r.json(); } catch { continue; }
+    if (activeJobId !== jobId) return;
+    $('frames').textContent = job.frames_processed || 0;
+    renderCounts(job);
+    if (job.status === 'queued') setStatus('queued', 'En cola...');
+    else if (job.status === 'processing') setStatus('processing', 'Procesando (vista previa en vivo)');
+    else if (job.status === 'done') {
+      setStatus('done', 'Listo');
+      const url = `/api/jobs/${jobId}/video`;
+      $('live').src = ''; $('live').style.display = 'none';
+      $('result').src = url; $('result').style.display = 'block';
+      $('download').href = url;
+      $('download').textContent = `Exportar mp4 (${job.frames_processed} frames)`;
+      $('download-row').style.display = 'flex';
+      $('submit').disabled = false; return;
+    } else if (job.status === 'error') {
+      setStatus('error', 'Falló'); showError(job.error || 'Error desconocido');
+      $('live').src = ''; $('live').style.display = 'none';
+      $('submit').disabled = false; return;
+    }
+  }
+}
+
+updateHint();
+
+// Auto-save on advanced/config input changes
+['prompts', 'model', 'conf', 'stride', 'device', 'tracker', 'show-id', 'show-conf',
+ 'show-class-name', 'show-box', 'show-mask',
+ 'show-legend', 'legend-corner',
+ 't-act', 't-lost', 't-match', 't-min',
+ 'line-label', 'roi-label', 'line-color', 'roi-color',
+ 'show-counts-overlay', 'counts-corner',
+ 'bbox-label-position', 'line-label-position', 'roi-label-position'].forEach(id => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('input', scheduleSave);
+  el.addEventListener('change', scheduleSave);
+});
+
+// Live-update SVG overlay when label / color / position changes
+['line-label', 'roi-label', 'line-color', 'roi-color',
+ 'line-label-position', 'roi-label-position',
+ 'bbox-label-position'].forEach(id => {
+  $(id).addEventListener('input', renderOverlay);
+  $(id).addEventListener('change', renderOverlay);
+});
+
+// Populate device dropdown
+(async () => {
+  try {
+    const r = await fetch('/api/devices');
+    if (!r.ok) return;
+    const data = await r.json();
+    const sel = $('device');
+    sel.innerHTML = data.options.map(o =>
+      `<option value="${o.id}" ${o.id === data.default ? 'selected' : ''}>${escapeHtml(o.label)}</option>`
+    ).join('');
+  } catch { /* keep CPU fallback */ }
+})();
+
+// Initial load: populate sessions list
+refreshSessions();
+</script>
+</body>
+</html>
