@@ -714,16 +714,14 @@ def run_stream(
             if roi_zone is not None and len(detections) > 0:
                 inside = roi_zone.trigger(detections)
                 detections = detections[inside]
+            real_dets_with_masks = None  # reference to pre-merge real detections (for mask rendering)
             if tracker is not None:
                 detections = tracker.update_with_detections(detections)
-                # Remember class for each tracker_id (lost tracks don't expose class_id)
                 if detections.tracker_id is not None and detections.class_id is not None:
                     for i in range(len(detections)):
                         tid = detections.tracker_id[i]
                         if tid is not None:
                             tracker_class_map[int(tid)] = int(detections.class_id[i])
-                # EMA smoothing on xyxy per tracker_id — kills the ±1-2 px jitter that
-                # comes from per-frame independent detections.
                 if cfg.smooth_bbox and detections.tracker_id is not None and len(detections) > 0:
                     a = max(0.0, min(0.95, cfg.smooth_factor))
                     new_xyxy = detections.xyxy.copy().astype(np.float32)
@@ -738,22 +736,64 @@ def run_stream(
                             smoothed_xyxy[tid_i] = new_xyxy[i].copy()
                         new_xyxy[i] = smoothed_xyxy[tid_i]
                     detections.xyxy = new_xyxy
-                # Render masks for the REAL detections now (before stripping for merge).
-                # sv.Detections.merge requires uniform mask presence; ghosts have no
-                # mask predictions, so we drop masks from reals after this point.
-                if mask_ann is not None and detections.mask is not None and len(detections) > 0:
-                    scene = mask_ann.annotate(scene=scene, detections=detections)
+                # Keep a handle on the real (pre-merge) detections so we can render
+                # their masks later — the merge below strips the mask field.
+                real_dets_with_masks = detections
                 if cfg.show_ghost_tracks:
                     ghosts = _ghost_detections(tracker, tracker_class_map,
                                                cfg.ghost_max_age, is_obb=is_obb)
                     if ghosts is not None and len(ghosts) > 0:
-                        if detections.mask is not None:
-                            detections = sv.Detections(
-                                xyxy=detections.xyxy, confidence=detections.confidence,
-                                class_id=detections.class_id, tracker_id=detections.tracker_id,
-                            )
+                        keep_data: dict = {}
+                        if is_obb and "xyxyxyxy" in (detections.data or {}):
+                            keep_data["xyxyxyxy"] = detections.data["xyxyxyxy"]
+                        detections = sv.Detections(
+                            xyxy=detections.xyxy,
+                            confidence=detections.confidence,
+                            class_id=detections.class_id,
+                            tracker_id=detections.tracker_id,
+                            data=keep_data,
+                        )
                         detections = sv.Detections.merge([detections, ghosts])
 
+            # ----- Phase 2: triggers (counts, rates, occupancy) -----
+            in_mask = out_mask = None
+            if line_zone is not None:
+                in_mask, out_mask = line_zone.trigger(detections)
+                t_video = n / max(1e-6, fr)
+                if len(detections) > 0 and detections.class_id is not None:
+                    for i in range(len(detections)):
+                        cid = int(detections.class_id[i])
+                        cname = names[cid] if cid < len(names) else f"class_{cid}"
+                        if in_mask[i]:
+                            counts_in[cname] = counts_in.get(cname, 0) + 1
+                            if cfg.rate_source in ("in", "both"):
+                                event_times.setdefault(cname, _deque()).append(t_video)
+                        if out_mask[i]:
+                            counts_out[cname] = counts_out.get(cname, 0) + 1
+                            if cfg.rate_source in ("out", "both"):
+                                event_times.setdefault(cname, _deque()).append(t_video)
+                current_window = max(cfg.rate_window_min_sec,
+                                     min(cfg.rate_window_max_sec, t_video))
+                cutoff = t_video - current_window
+                factor = 60.0 if cfg.rate_unit == "min" else 1.0
+                for cname, dq in event_times.items():
+                    while dq and dq[0] < cutoff:
+                        dq.popleft()
+                    if len(dq) > 0 and current_window > 0:
+                        rates[cname] = (len(dq) / current_window) * factor
+                    else:
+                        rates[cname] = float(cfg.initial_rates.get(cname, 0.0))
+            for r in multi_rois:
+                if len(detections) > 0:
+                    inside_roi = r["zone"].trigger(detections)
+                    cnt = int(np.asarray(inside_roi).sum())
+                else:
+                    cnt = 0
+                roi_occupancy[r["name"]] = {
+                    "occupied": cnt >= r["threshold"], "count": cnt,
+                }
+
+            # ----- Phase 3: labels -----
             labels: list[str] = []
             if len(detections) > 0:
                 for i in range(len(detections)):
@@ -767,6 +807,41 @@ def run_stream(
                     if cfg.show_conf and detections.confidence is not None:
                         parts.append(f"{float(detections.confidence[i]):.2f}")
                     labels.append(" ".join(parts))
+
+            # ----- Phase 4: draw the UNDER-bbox layer (ROIs + line) -----
+            if roi_annotator is not None:
+                if cfg.outline_roi and cfg.roi_polygon:
+                    pts = np.array(cfg.roi_polygon, dtype=np.int32).reshape(-1, 1, 2)
+                    cv2.polylines(scene, [pts], True, (0, 0, 0), 4, lineType=cv2.LINE_AA)
+                scene = roi_annotator.annotate(scene=scene)
+                if cfg.roi_label and cfg.roi_polygon:
+                    pos = _roi_label_pos(cfg.roi_polygon, cfg.roi_label_position)
+                    _draw_label(scene, cfg.roi_label, pos, roi_rgb)
+            for r in multi_rois:
+                if cfg.outline_roi:
+                    pts = np.array(r["points"], dtype=np.int32).reshape(-1, 1, 2)
+                    cv2.polylines(scene, [pts], True, (0, 0, 0), 4, lineType=cv2.LINE_AA)
+                scene = r["annotator"].annotate(scene=scene)
+                if r["name"]:
+                    pts = np.array(r["points"], dtype=np.int32)
+                    cx, cy = int(pts[:, 0].mean()), int(pts[:, 1].mean())
+                    _draw_label(scene, r["name"], (cx, cy), r["color_rgb"])
+            if line_zone is not None:
+                if cfg.outline_line:
+                    cv2.line(scene,
+                             (int(cfg.line[0]), int(cfg.line[1])),
+                             (int(cfg.line[2]), int(cfg.line[3])),
+                             (0, 0, 0), cfg.line_thickness + 3, lineType=cv2.LINE_AA)
+                scene = line_annotator.annotate(frame=scene, line_counter=line_zone)
+                if cfg.line_label:
+                    pos = _line_label_pos(cfg.line, cfg.line_label_position)
+                    _draw_label(scene, cfg.line_label, pos, line_rgb)
+
+            # ----- Phase 5: draw the BBOX layer (mask → box → center → label) -----
+            if mask_ann is not None and real_dets_with_masks is not None \
+               and real_dets_with_masks.mask is not None and len(real_dets_with_masks) > 0:
+                scene = mask_ann.annotate(scene=scene, detections=real_dets_with_masks)
+            if len(detections) > 0:
                 if cfg.show_box:
                     if box_outline_ann is not None:
                         scene = box_outline_ann.annotate(scene=scene, detections=detections)
@@ -785,79 +860,11 @@ def run_stream(
                         scene = label_outline_ann.annotate(scene=scene, detections=detections, labels=labels)
                     scene = label_ann.annotate(scene=scene, detections=detections, labels=labels)
 
-            # Legacy single ROI overlay
-            if roi_annotator is not None:
-                if cfg.outline_roi and cfg.roi_polygon:
-                    pts = np.array(cfg.roi_polygon, dtype=np.int32).reshape(-1, 1, 2)
-                    cv2.polylines(scene, [pts], True, (0, 0, 0), 4, lineType=cv2.LINE_AA)
-                scene = roi_annotator.annotate(scene=scene)
-                if cfg.roi_label and cfg.roi_polygon:
-                    pos = _roi_label_pos(cfg.roi_polygon, cfg.roi_label_position)
-                    _draw_label(scene, cfg.roi_label, pos, roi_rgb)
-
-            # Multi-ROI occupancy: count detections inside each and annotate
-            for r in multi_rois:
-                if len(detections) > 0:
-                    inside = r["zone"].trigger(detections)
-                    cnt = int(np.asarray(inside).sum())
-                else:
-                    cnt = 0
-                occ = cnt >= r["threshold"]
-                roi_occupancy[r["name"]] = {"occupied": occ, "count": cnt}
-                if cfg.outline_roi:
-                    pts = np.array(r["points"], dtype=np.int32).reshape(-1, 1, 2)
-                    cv2.polylines(scene, [pts], True, (0, 0, 0), 4, lineType=cv2.LINE_AA)
-                scene = r["annotator"].annotate(scene=scene)
-                # Label = ROI name
-                if r["name"]:
-                    pts = np.array(r["points"], dtype=np.int32)
-                    cx, cy = int(pts[:, 0].mean()), int(pts[:, 1].mean())
-                    _draw_label(scene, r["name"], (cx, cy), r["color_rgb"])
-
-            if line_zone is not None:
-                in_mask, out_mask = line_zone.trigger(detections)
-                t_video = n / max(1e-6, fr)
-                if len(detections) > 0 and detections.class_id is not None:
-                    for i in range(len(detections)):
-                        cid = int(detections.class_id[i])
-                        cname = names[cid] if cid < len(names) else f"class_{cid}"
-                        if in_mask[i]:
-                            counts_in[cname] = counts_in.get(cname, 0) + 1
-                            if cfg.rate_source in ("in", "both"):
-                                event_times.setdefault(cname, _deque()).append(t_video)
-                        if out_mask[i]:
-                            counts_out[cname] = counts_out.get(cname, 0) + 1
-                            if cfg.rate_source in ("out", "both"):
-                                event_times.setdefault(cname, _deque()).append(t_video)
-                # Rolling rate: window grows from min to max with video elapsed time
-                current_window = max(cfg.rate_window_min_sec,
-                                     min(cfg.rate_window_max_sec, t_video))
-                cutoff = t_video - current_window
-                factor = 60.0 if cfg.rate_unit == "min" else 1.0
-                for cname, dq in event_times.items():
-                    while dq and dq[0] < cutoff:
-                        dq.popleft()
-                    if len(dq) > 0 and current_window > 0:
-                        rates[cname] = (len(dq) / current_window) * factor
-                    else:
-                        # No real events yet for this class — keep the user-supplied baseline
-                        rates[cname] = float(cfg.initial_rates.get(cname, 0.0))
-                # Outline pass: draw a thicker black line first so the colored
-                # line on top has a dark border for visibility on any background.
-                if cfg.outline_line:
-                    cv2.line(scene,
-                             (int(cfg.line[0]), int(cfg.line[1])),
-                             (int(cfg.line[2]), int(cfg.line[3])),
-                             (0, 0, 0), cfg.line_thickness + 3, lineType=cv2.LINE_AA)
-                scene = line_annotator.annotate(frame=scene, line_counter=line_zone)
-                if cfg.line_label:
-                    pos = _line_label_pos(cfg.line, cfg.line_label_position)
-                    _draw_label(scene, cfg.line_label, pos, line_rgb)
-                if on_counts is not None:
-                    on_counts(dict(counts_in), dict(counts_out),
-                              rates=dict(rates) if cfg.show_rate else None,
-                              window=current_window if cfg.show_rate else 0.0,
-                              roi_occupancy=dict(roi_occupancy))
+            if on_counts is not None and (line_zone is not None or multi_rois):
+                on_counts(dict(counts_in), dict(counts_out),
+                          rates=dict(rates) if cfg.show_rate else None,
+                          window=current_window if cfg.show_rate else 0.0,
+                          roi_occupancy=dict(roi_occupancy))
 
             # ROI status panel (libre / ocupado per ROI)
             if cfg.show_roi_panel and multi_rois:
