@@ -57,8 +57,12 @@ class StreamConfig:
     # Occupancy stays "occupied" for at least N seconds after the last detection
     # — kills the flicker when a car/object briefly disappears.
     occupied_persistence_sec: float = 0.0
-    # Multiplies every text scale (panels, labels, line counts, ROI names…).
-    text_scale_mult: float = 1.0
+    # Text size multipliers — split into 3 categories so the user can scale
+    # detection labels, zone/line/ROI labels and corner panels independently.
+    text_scale_mult: float = 1.0          # legacy global; used as fallback if the 3 below are 1.0
+    text_mult_det: float = 1.0
+    text_mult_zones: float = 1.0
+    text_mult_panels: float = 1.0
     # Tracker params (ByteTrack)
     track_activation_threshold: float = 0.25
     lost_track_buffer: int = 30
@@ -151,10 +155,11 @@ def get_model_class_names(model_name: str, model_type: str) -> dict[int, str]:
     return {int(k): str(v) for k, v in m.names.items()}
 
 
-def _draw_label(img, text: str, center: tuple[int, int], color_rgb: tuple[int, int, int]) -> None:
+def _draw_label(img, text: str, center: tuple[int, int], color_rgb: tuple[int, int, int],
+                scale_mult: float = 1.0) -> None:
     """Centered label with dark outline so it reads on any background."""
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale = 0.6
+    scale = 0.6 * scale_mult
     (tw, th), _ = cv2.getTextSize(text, font, scale, 2)
     x = center[0] - tw // 2
     y = center[1] + th // 2
@@ -246,13 +251,13 @@ def _draw_roi_status_panel(img, rois: list[dict], occupancy: dict[str, dict], cf
     free_rgb = _hex_to_rgb(cfg.roi_panel_free_color, (52, 211, 153))
     occ_rgb = _hex_to_rgb(cfg.roi_panel_occupied_color, (248, 113, 113))
     font = cv2.FONT_HERSHEY_SIMPLEX
-    name_scale = 0.45
-    status_scale = 0.55
     cell_w = max(40, int(getattr(cfg, "roi_panel_cell_w", 130)))
     cell_h = max(30, int(getattr(cfg, "roi_panel_cell_h", 78)))
-    tsm = max(0.2, min(5.0, getattr(cfg, "text_scale_mult", 1.0)))
-    name_scale = 0.45 * tsm
-    status_scale = 0.55 * tsm
+    tsmp = max(0.2, min(5.0, getattr(cfg, "text_mult_panels", 1.0))) * max(
+        0.2, min(5.0, getattr(cfg, "text_scale_mult", 1.0))
+    )
+    name_scale = 0.45 * tsmp
+    status_scale = 0.55 * tsmp
     pad = 8
     gap = 6
     n = len(rois)
@@ -297,14 +302,15 @@ def _draw_roi_status_panel(img, rois: list[dict], occupancy: dict[str, dict], cf
         cv2.putText(img, text, (tx, ty), font, status_scale, (255, 255, 255), 2, cv2.LINE_AA)
 
 
-def _draw_legend(img, items: list[tuple[str, tuple[int, int, int]]], corner: str) -> None:
+def _draw_legend(img, items: list[tuple[str, tuple[int, int, int]]], corner: str,
+                 scale_mult: float = 1.0) -> None:
     """Color → label legend in chosen corner."""
     if not items:
         return
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale = 0.55
+    scale = 0.55 * scale_mult
     thick = 1
-    line_h = 22
+    line_h = int(22 * scale_mult)
     pad = 8
     swatch_w = 16
     widths = [cv2.getTextSize(label, font, scale, thick)[0][0] for label, _ in items]
@@ -336,16 +342,17 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
                          rates: dict[str, float] | None = None,
                          rate_unit: str = "min", rate_window: float = 0.0,
                          show_rate_window: bool = True,
-                         class_colors: list[tuple[int, int, int]] | None = None) -> None:
+                         class_colors: list[tuple[int, int, int]] | None = None,
+                         scale_mult: float = 1.0) -> None:
     """Draw a semi-transparent box with per-class in/out counts in a corner."""
     if not names:
         return
     if not (show_in or show_out):
         return
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale = 0.55
+    scale = 0.55 * scale_mult
     thick = 1
-    line_h = 22
+    line_h = int(22 * scale_mult)
     pad = 8
     NAME_W = 11
     VAL_W = 6
@@ -611,15 +618,18 @@ def run_stream(
         bbox_pos = sv.Position[cfg.bbox_label_position]
     except KeyError:
         bbox_pos = sv.Position.TOP_LEFT
-    tsm = max(0.2, min(5.0, cfg.text_scale_mult))
+    legacy = max(0.2, min(5.0, cfg.text_scale_mult))
+    tsm_det = max(0.2, min(5.0, cfg.text_mult_det)) * (legacy if legacy != 1.0 else 1.0)
+    tsm_zones = max(0.2, min(5.0, cfg.text_mult_zones)) * (legacy if legacy != 1.0 else 1.0)
+    tsm_panels = max(0.2, min(5.0, cfg.text_mult_panels)) * (legacy if legacy != 1.0 else 1.0)
     # Label outline: stack two LabelAnnotators with different paddings — the
     # bigger black one peeks out around the smaller colored one as a 1-2 px ring.
     label_outline_ann = sv.LabelAnnotator(
-        text_scale=0.5 * tsm, text_padding=5, text_thickness=1,
+        text_scale=0.5 * tsm_det, text_padding=5, text_thickness=1,
         text_position=bbox_pos,
         color=sv.Color.BLACK, text_color=sv.Color.BLACK,
     ) if cfg.outline_bbox else None
-    label_ann = sv.LabelAnnotator(text_scale=0.5 * tsm, text_padding=3, text_thickness=1,
+    label_ann = sv.LabelAnnotator(text_scale=0.5 * tsm_det, text_padding=3, text_thickness=1,
                                   text_position=bbox_pos, color=palette)
     mask_ann = sv.MaskAnnotator(color=palette, opacity=max(0.0, min(1.0, cfg.mask_alpha))) if cfg.show_mask else None
     color_ann = sv.ColorAnnotator(color=palette, opacity=max(0.0, min(1.0, cfg.bbox_fill_alpha))) if cfg.bbox_fill else None
@@ -639,7 +649,7 @@ def run_stream(
         # If counts overlay is on, suppress on-line text — counts go in the corner box.
         on_line = not cfg.show_counts_overlay
         line_annotator = sv.LineZoneAnnotator(
-            thickness=cfg.line_thickness, text_thickness=1, text_scale=0.6 * tsm, text_padding=4,
+            thickness=cfg.line_thickness, text_thickness=1, text_scale=0.6 * tsm_zones, text_padding=4,
             color=sv.Color(*line_rgb),
             custom_in_text=cfg.in_label or "in",
             custom_out_text=cfg.out_label or "out",
@@ -655,7 +665,7 @@ def run_stream(
         roi_zone = sv.PolygonZone(polygon=polygon, triggering_anchors=[sv.Position.CENTER])
         roi_annotator = sv.PolygonZoneAnnotator(
             zone=roi_zone, color=sv.Color(*roi_rgb),
-            thickness=2, text_scale=0.5 * tsm, text_thickness=1, text_padding=4,
+            thickness=2, text_scale=0.5 * tsm_zones, text_thickness=1, text_padding=4,
             display_in_zone_count=False, opacity=0.10,
         )
 
@@ -673,7 +683,7 @@ def run_stream(
         zone = sv.PolygonZone(polygon=poly, triggering_anchors=[sv.Position.CENTER])
         annotator = sv.PolygonZoneAnnotator(
             zone=zone, color=sv.Color(*rgb),
-            thickness=2, text_scale=0.5 * tsm, text_thickness=1, text_padding=4,
+            thickness=2, text_scale=0.5 * tsm_zones, text_thickness=1, text_padding=4,
             display_in_zone_count=False, opacity=0.10,
         )
         multi_rois.append({
@@ -840,7 +850,7 @@ def run_stream(
                 scene = roi_annotator.annotate(scene=scene)
                 if cfg.roi_label and cfg.roi_polygon:
                     pos = _roi_label_pos(cfg.roi_polygon, cfg.roi_label_position)
-                    _draw_label(scene, cfg.roi_label, pos, roi_rgb)
+                    _draw_label(scene, cfg.roi_label, pos, roi_rgb, scale_mult=tsm_zones)
             for r in multi_rois:
                 if cfg.outline_roi:
                     pts = np.array(r["points"], dtype=np.int32).reshape(-1, 1, 2)
@@ -848,7 +858,7 @@ def run_stream(
                 scene = r["annotator"].annotate(scene=scene)
                 if r["name"]:
                     pos = _roi_label_pos(r["points"], r.get("label_position", "center"))
-                    _draw_label(scene, r["name"], pos, r["color_rgb"])
+                    _draw_label(scene, r["name"], pos, r["color_rgb"], scale_mult=tsm_zones)
             if line_zone is not None:
                 if cfg.outline_line:
                     cv2.line(scene,
@@ -858,7 +868,7 @@ def run_stream(
                 scene = line_annotator.annotate(frame=scene, line_counter=line_zone)
                 if cfg.line_label:
                     pos = _line_label_pos(cfg.line, cfg.line_label_position)
-                    _draw_label(scene, cfg.line_label, pos, line_rgb)
+                    _draw_label(scene, cfg.line_label, pos, line_rgb, scale_mult=tsm_zones)
 
             # ----- Phase 5: draw the BBOX layer (mask → box → center → label) -----
             if mask_ann is not None and real_dets_with_masks is not None \
@@ -913,6 +923,7 @@ def run_stream(
                     rate_unit=cfg.rate_unit, rate_window=current_window,
                     show_rate_window=cfg.show_rate_window,
                     class_colors=cls_rgb_list,
+                    scale_mult=tsm_panels,
                 )
 
             # Legend overlay
@@ -927,7 +938,7 @@ def run_stream(
                     legend_items.append((cfg.roi_label or "ROI", roi_rgb))
                 if cfg.line is not None:
                     legend_items.append((cfg.line_label or "Línea", line_rgb))
-                _draw_legend(scene, legend_items, cfg.legend_corner)
+                _draw_legend(scene, legend_items, cfg.legend_corner, scale_mult=tsm_panels)
 
             if writer is None:
                 h, w = scene.shape[:2]

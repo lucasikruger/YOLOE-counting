@@ -350,9 +350,14 @@
       </div>
 
       <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border); display:flex; align-items:center; gap:14px; flex-wrap:wrap">
-        <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">Texto</span>
-        <label style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px" title="Multiplica el tamaño de TODOS los textos que se dibujan sobre el video (labels, panel libre/ocupado, conteos, leyendas). 1 = default; 2 = doble; 0.5 = mitad.">Multiplicador</label>
-        <input id="text-scale-mult" type="number" min="0.2" max="5" step="0.1" value="1.0" style="width:80px" />
+        <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">Multiplicador texto</span>
+        <label style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px" title="Detecciones — labels de cada bbox">Detecciones</label>
+        <input id="text-mult-det" type="number" min="0.2" max="5" step="0.1" value="1.0" style="width:70px" />
+        <label style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px" title="Zonas — etiquetas de la línea, ROIs filtro y zonas de ocupación">Zonas/Línea</label>
+        <input id="text-mult-zones" type="number" min="0.2" max="5" step="0.1" value="1.0" style="width:70px" />
+        <label style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px" title="Paneles esquineros — conteos, libre/ocupado, leyenda">Paneles</label>
+        <input id="text-mult-panels" type="number" min="0.2" max="5" step="0.1" value="1.0" style="width:70px" />
+        <input id="text-scale-mult" type="hidden" value="1.0" />
       </div>
 
       <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
@@ -855,7 +860,19 @@ function applySession(s) {
   if (rp.cell_w != null) $('roi-panel-cell-w').value = rp.cell_w;
   if (rp.cell_h != null) $('roi-panel-cell-h').value = rp.cell_h;
   if (rp.occupied_persistence_sec != null) $('occupied-persistence').value = rp.occupied_persistence_sec;
-  if (rp.text_scale_mult != null) $('text-scale-mult').value = rp.text_scale_mult;
+  if (rp.text_scale_mult != null) {
+    $('text-scale-mult').value = rp.text_scale_mult;
+    // If the user previously had only the global mult, mirror it to the new
+    // per-category fields if they're still at default.
+    if ($('text-mult-det').value === '1' || $('text-mult-det').value === '1.0') {
+      $('text-mult-det').value = rp.text_scale_mult;
+      $('text-mult-zones').value = rp.text_scale_mult;
+      $('text-mult-panels').value = rp.text_scale_mult;
+    }
+  }
+  if (rp.text_mult_det != null) $('text-mult-det').value = rp.text_mult_det;
+  if (rp.text_mult_zones != null) $('text-mult-zones').value = rp.text_mult_zones;
+  if (rp.text_mult_panels != null) $('text-mult-panels').value = rp.text_mult_panels;
   state.frameIndex = s.frame_index || 0;
   // Form values
   if (s.prompts != null) $('prompts').value = s.prompts;
@@ -1007,6 +1024,9 @@ function snapshotSession() {
       cell_h: +$('roi-panel-cell-h').value,
       occupied_persistence_sec: +$('occupied-persistence').value,
       text_scale_mult: +$('text-scale-mult').value,
+      text_mult_det: +$('text-mult-det').value,
+      text_mult_zones: +$('text-mult-zones').value,
+      text_mult_panels: +$('text-mult-panels').value,
     },
   };
 }
@@ -1974,6 +1994,9 @@ function buildJobForm() {
   fd.append('roi_panel_cell_h', $('roi-panel-cell-h').value);
   fd.append('occupied_persistence_sec', $('occupied-persistence').value);
   fd.append('text_scale_mult', $('text-scale-mult').value);
+  fd.append('text_mult_det', $('text-mult-det').value);
+  fd.append('text_mult_zones', $('text-mult-zones').value);
+  fd.append('text_mult_panels', $('text-mult-panels').value);
   fd.append('in_label', $('in-label').value);
   fd.append('out_label', $('out-label').value);
   fd.append('show_in', $('show-in').checked ? 'true' : 'false');
@@ -2259,7 +2282,8 @@ updateHint();
  'roi-panel-show', 'roi-panel-stack', 'roi-panel-corner',
  'roi-panel-free-color', 'roi-panel-occupied-color',
  'roi-panel-free-text', 'roi-panel-occupied-text',
- 'roi-panel-cell-w', 'roi-panel-cell-h', 'occupied-persistence', 'text-scale-mult',
+ 'roi-panel-cell-w', 'roi-panel-cell-h', 'occupied-persistence',
+ 'text-scale-mult', 'text-mult-det', 'text-mult-zones', 'text-mult-panels',
  'in-label', 'out-label', 'show-in', 'show-out',
  'show-counts-overlay', 'counts-corner',
  'bbox-label-position', 'line-label-position', 'roi-label-position'].forEach(id => {
