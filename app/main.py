@@ -505,18 +505,34 @@ def _run_job(job_id: str, cfg: StreamConfig) -> None:
 
 
 def _ensure_browser_playable(path: Path) -> Path:
+    """Re-encode the raw mp4 (mp4v / mpeg4 from cv2.VideoWriter) to H.264.
+    Browsers and most video players (including WhatsApp uploads) can't play
+    mpeg4 inside an .mp4 container; H.264 + yuv420p + faststart fixes it.
+    Raises if ffmpeg is missing — we used to swallow that error and serve the
+    raw mp4v file, which made the result silently unplayable."""
     target = path.with_name(path.stem.replace("_raw", "") + ".mp4")
+    if target == path:
+        target = path.with_name(path.stem + "_h264.mp4")
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-i", str(path), "-c:v", "libx264",
-             "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(target)],
+            ["ffmpeg", "-y", "-i", str(path),
+             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+             str(target)],
             check=True, capture_output=True,
         )
-        if target != path:
-            path.unlink(missing_ok=True)
-        return target
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return path
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            "ffmpeg not found in the container. Install it (apt-get install ffmpeg) "
+            "and rebuild the image. Without ffmpeg the output stays as mp4v which "
+            "browsers and WhatsApp cannot play."
+        ) from e
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"ffmpeg failed to re-encode {path.name}: {e.stderr.decode(errors='ignore')[-400:]}"
+        ) from e
+    path.unlink(missing_ok=True)
+    return target
 
 
 @app.get("/api/jobs/{job_id}")

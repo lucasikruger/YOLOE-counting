@@ -1,9 +1,13 @@
-ARG BASE_IMAGE=ultralytics/ultralytics:latest-cpu
-FROM ${BASE_IMAGE}
+FROM ultralytics/ultralytics:latest-cpu
 
 WORKDIR /app
 
 # FastAPI stack + python-multipart for uploads. ffmpeg ya viene en la base.
+# ffmpeg for the H.264 re-encode of the annotated mp4 (the ultralytics base
+# image ships libavcodec via opencv but not the standalone ffmpeg binary).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir \
     fastapi>=0.110 \
     "uvicorn[standard]>=0.27" \
