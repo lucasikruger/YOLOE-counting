@@ -414,35 +414,37 @@
           </div>
         </div>
 
-        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border)">
-          <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap">
-            <div style="display:flex; align-items:center; gap:8px">
-              <input id="show-rate" type="checkbox" checked style="width:auto; margin:0" />
-              <label for="show-rate" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
-                Tasa por clase
-              </label>
-            </div>
-            <select id="rate-unit" style="width:auto" title="Unidad de la tasa">
-              <option value="min" selected>por minuto</option>
-              <option value="sec">por segundo</option>
-            </select>
-            <select id="rate-source" style="width:auto" title="Qué cruces cuenta">
-              <option value="both" selected>in + out</option>
-              <option value="in">solo in</option>
-              <option value="out">solo out</option>
-            </select>
-            <label for="rate-min" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">
-              Ventana mín (s)
-            </label>
-            <input id="rate-min" type="number" min="0.1" max="60" step="0.5" value="1" style="width:80px" />
-            <label for="rate-max" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">
-              Ventana máx (s)
-            </label>
-            <input id="rate-max" type="number" min="1" max="120" step="1" value="5" style="width:80px" />
-          </div>
-          <div class="hint">La ventana arranca chica (ventana mín) y crece con el tiempo de video procesado hasta el techo (ventana máx). Así al principio no hay valores con ruido por dividir entre 0.</div>
-        </div>
         <div class="hint">Subí <b>min consecutive frames</b> a 2-3 si ves IDs flickering. Bajá <b>matching</b> a 0.5-0.6 si los objetos se mueven mucho. <b>Cajas fantasma</b>: muestra la predicción Kalman cuando el detector pierde el objeto por unos frames (oclusión, inclinación). Subí <b>edad máx</b> para tolerar oclusiones más largas, pero la predicción se vuelve menos confiable.</div>
+      </details>
+
+      <details style="margin-top:14px">
+        <summary>Tasa de conteo</summary>
+        <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+          <div style="display:flex; align-items:center; gap:8px">
+            <input id="show-rate" type="checkbox" checked style="width:auto; margin:0" />
+            <label for="show-rate" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+              Mostrar tasa
+            </label>
+          </div>
+          <select id="rate-unit" style="width:auto" title="Unidad de la tasa">
+            <option value="min" selected>por minuto</option>
+            <option value="sec">por segundo</option>
+          </select>
+          <select id="rate-source" style="width:auto" title="Qué cruces cuenta">
+            <option value="both" selected>in + out</option>
+            <option value="in">solo in</option>
+            <option value="out">solo out</option>
+          </select>
+          <label for="rate-min" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">
+            Ventana mín (s)
+          </label>
+          <input id="rate-min" type="number" min="0.1" max="60" step="0.5" value="1" style="width:80px" />
+          <label for="rate-max" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">
+            Ventana máx (s)
+          </label>
+          <input id="rate-max" type="number" min="1" max="120" step="1" value="5" style="width:80px" />
+        </div>
+        <div class="hint">La ventana arranca chica (ventana mín) y crece con el tiempo de video procesado hasta el techo (ventana máx). Así al principio no hay valores con ruido por dividir entre 0.</div>
       </details>
     </details>
 

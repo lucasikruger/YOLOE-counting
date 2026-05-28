@@ -526,10 +526,19 @@ def run_stream(
                         tid = detections.tracker_id[i]
                         if tid is not None:
                             tracker_class_map[int(tid)] = int(detections.class_id[i])
-                # Ghost detections from Kalman predictions of recently-lost tracks
+                # Render masks for the REAL detections now (before stripping for merge).
+                # sv.Detections.merge requires uniform mask presence; ghosts have no
+                # mask predictions, so we drop masks from reals after this point.
+                if mask_ann is not None and detections.mask is not None and len(detections) > 0:
+                    scene = mask_ann.annotate(scene=scene, detections=detections)
                 if cfg.show_ghost_tracks:
                     ghosts = _ghost_detections(tracker, tracker_class_map, cfg.ghost_max_age)
                     if ghosts is not None and len(ghosts) > 0:
+                        if detections.mask is not None:
+                            detections = sv.Detections(
+                                xyxy=detections.xyxy, confidence=detections.confidence,
+                                class_id=detections.class_id, tracker_id=detections.tracker_id,
+                            )
                         detections = sv.Detections.merge([detections, ghosts])
 
             labels: list[str] = []
@@ -545,8 +554,6 @@ def run_stream(
                     if cfg.show_conf and detections.confidence is not None:
                         parts.append(f"{float(detections.confidence[i]):.2f}")
                     labels.append(" ".join(parts))
-                if mask_ann is not None and detections.mask is not None:
-                    scene = mask_ann.annotate(scene=scene, detections=detections)
                 if cfg.show_box:
                     scene = box_ann.annotate(scene=scene, detections=detections)
                 if any(l for l in labels):
