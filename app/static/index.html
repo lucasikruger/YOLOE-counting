@@ -477,6 +477,20 @@
             <input id="t-ghost-age" type="number" min="1" max="120" step="1" value="10" style="width:80px" />
           </div>
         </div>
+        <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+          <div style="display:flex; align-items:center; gap:8px">
+            <input id="t-smooth" type="checkbox" checked style="width:auto; margin:0" />
+            <label for="t-smooth" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+              Suavizar bbox (EMA)
+            </label>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px">
+            <label for="t-smooth-factor" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px" title="0 = sin suavizar (jittery) · 0.9 = muy suave pero laggy">
+              Factor (0–0.95)
+            </label>
+            <input id="t-smooth-factor" type="number" min="0" max="0.95" step="0.05" value="0.7" style="width:80px" />
+          </div>
+        </div>
 
         <div class="hint">Subí <b>min consecutive frames</b> a 2-3 si ves IDs flickering. Bajá <b>matching</b> a 0.5-0.6 si los objetos se mueven mucho. <b>Cajas fantasma</b>: muestra la predicción Kalman cuando el detector pierde el objeto por unos frames (oclusión, inclinación). Subí <b>edad máx</b> para tolerar oclusiones más largas, pero la predicción se vuelve menos confiable.</div>
       </details>
@@ -702,6 +716,8 @@ function applySession(s) {
   if (t.min != null) $('t-min').value = t.min;
   if (t.ghost != null) $('t-ghost').checked = !!t.ghost;
   if (t.ghost_age != null) $('t-ghost-age').value = t.ghost_age;
+  if (t.smooth != null) $('t-smooth').checked = !!t.smooth;
+  if (t.smooth_factor != null) $('t-smooth-factor').value = t.smooth_factor;
   const r = s.rate_params || {};
   if (r.show != null) $('show-rate').checked = !!r.show;
   if (r.unit) $('rate-unit').value = r.unit;
@@ -775,6 +791,7 @@ function snapshotSession() {
       act: +$('t-act').value, lost: +$('t-lost').value,
       match: +$('t-match').value, min: +$('t-min').value,
       ghost: $('t-ghost').checked, ghost_age: +$('t-ghost-age').value,
+      smooth: $('t-smooth').checked, smooth_factor: +$('t-smooth-factor').value,
     },
     rate_params: {
       show: $('show-rate').checked, unit: $('rate-unit').value,
@@ -1552,6 +1569,8 @@ function buildJobForm() {
   fd.append('minimum_consecutive_frames', $('t-min').value);
   fd.append('show_ghost_tracks', $('t-ghost').checked ? 'true' : 'false');
   fd.append('ghost_max_age', $('t-ghost-age').value);
+  fd.append('smooth_bbox', $('t-smooth').checked ? 'true' : 'false');
+  fd.append('smooth_factor', $('t-smooth-factor').value);
   fd.append('show_rate', $('show-rate').checked ? 'true' : 'false');
   fd.append('rate_unit', $('rate-unit').value);
   fd.append('rate_window_min_sec', $('rate-min').value);
@@ -1754,7 +1773,7 @@ updateHint();
 ['prompts', 'model', 'conf', 'stride', 'device', 'tracker', 'show-id', 'show-conf',
  'show-class-name', 'show-box', 'show-mask',
  'show-legend', 'legend-corner',
- 't-act', 't-lost', 't-match', 't-min', 't-ghost', 't-ghost-age',
+ 't-act', 't-lost', 't-match', 't-min', 't-ghost', 't-ghost-age', 't-smooth', 't-smooth-factor',
  'show-rate', 'rate-unit', 'rate-source', 'rate-min', 'rate-max', 'show-rate-window',
  'outline-line', 'outline-roi', 'outline-bbox', 'line-thickness', 'bbox-thickness',
  'show-bbox-center', 'bbox-center-color', 'bbox-center-size',

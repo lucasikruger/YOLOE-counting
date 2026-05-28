@@ -47,6 +47,9 @@ class StreamConfig:
     # Ghost boxes: render last predicted position for tracks that lost detection
     show_ghost_tracks: bool = True
     ghost_max_age: int = 10
+    # Bbox smoothing — exponential moving average per tracker_id over xyxy.
+    smooth_bbox: bool = True
+    smooth_factor: float = 0.7   # 0 = no smoothing (raw det) · 1 = frozen at first sighting
     # Throughput rate
     show_rate: bool = True
     rate_unit: str = "min"        # "sec" | "min"
@@ -557,6 +560,7 @@ def run_stream(
 
     n = 0
     tracker_class_map: dict[int, int] = {}  # tracker_id → class_id (for ghost reconstruction)
+    smoothed_xyxy: dict[int, np.ndarray] = {}  # tracker_id → EMA-smoothed xyxy
     try:
         for result in model.predict(**kwargs):
             scene = result.orig_img.copy()  # BGR ndarray
@@ -573,6 +577,22 @@ def run_stream(
                         tid = detections.tracker_id[i]
                         if tid is not None:
                             tracker_class_map[int(tid)] = int(detections.class_id[i])
+                # EMA smoothing on xyxy per tracker_id — kills the ±1-2 px jitter that
+                # comes from per-frame independent detections.
+                if cfg.smooth_bbox and detections.tracker_id is not None and len(detections) > 0:
+                    a = max(0.0, min(0.95, cfg.smooth_factor))
+                    new_xyxy = detections.xyxy.copy().astype(np.float32)
+                    for i in range(len(detections)):
+                        tid = detections.tracker_id[i]
+                        if tid is None:
+                            continue
+                        tid_i = int(tid)
+                        if tid_i in smoothed_xyxy:
+                            smoothed_xyxy[tid_i] = a * smoothed_xyxy[tid_i] + (1.0 - a) * new_xyxy[i]
+                        else:
+                            smoothed_xyxy[tid_i] = new_xyxy[i].copy()
+                        new_xyxy[i] = smoothed_xyxy[tid_i]
+                    detections.xyxy = new_xyxy
                 # Render masks for the REAL detections now (before stripping for merge).
                 # sv.Detections.merge requires uniform mask presence; ghosts have no
                 # mask predictions, so we drop masks from reals after this point.
