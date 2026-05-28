@@ -1260,7 +1260,7 @@ $('submit').addEventListener('click', async () => {
   $('result').style.display = 'none';
   $('download-row').style.display = 'none';
   $('live').style.display = 'none'; $('live').src = '';
-  $('counts').style.display = 'none'; $('counts-rows').innerHTML = '';
+  $('counts').style.display = 'none'; $('counts-grid').innerHTML = '';
 
   // Client-side validation con error visible
   if (state.mode === 'text' && !$('prompts').value.trim()) {
@@ -1305,7 +1305,7 @@ function resetToConfig() {
   $('status-card').style.display = 'none';
   $('config-card').style.display = 'block';
   $('live').src = ''; $('result').src = '';
-  $('counts').style.display = 'none'; $('counts-rows').innerHTML = '';
+  $('counts').style.display = 'none'; $('counts-grid').innerHTML = '';
   $('frames').textContent = '0';
   $('error').style.display = 'none';
   $('badge').className = 'badge queued'; $('badge').textContent = 'queued';
