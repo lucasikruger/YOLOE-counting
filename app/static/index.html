@@ -236,9 +236,9 @@
       <span class="frame-counter"><span id="frame-cur">0</span> / <span id="frame-total">0</span></span>
 
       <div class="tool-group" id="tool-group">
-        <button type="button" class="tool-btn" data-tool="select" id="tool-select" disabled>Selección</button>
+        <button type="button" class="tool-btn active" data-tool="select" id="tool-select">Selección</button>
         <button type="button" class="tool-btn" data-tool="bbox" id="tool-bbox" disabled>Bbox</button>
-        <button type="button" class="tool-btn active" data-tool="line" id="tool-line">Línea</button>
+        <button type="button" class="tool-btn" data-tool="line" id="tool-line">Línea</button>
         <button type="button" class="tool-btn" data-tool="roi" id="tool-roi">ROI</button>
         <button type="button" class="tool-btn" data-tool="occ" id="tool-occ">Ocupación</button>
       </div>
@@ -731,12 +731,12 @@ function repopulateModelSelect(modelType) {
 }
 
 const state = {
-  modelType: 'yoloe',                    // yoloe | yolo | yolo-obb
-  yoloClassIds: [],                      // selected class IDs for yolo/yolo-obb
-  yoloClassNames: {},                    // cache of model.names {id: name}
-  yoloClassColors: {},                   // {id: '#hex'} — per-class color in yolo mode
+  modelType: 'yoloe',
+  yoloClassIds: [],
+  yoloClassNames: {},
+  yoloClassColors: {},
   mode: 'text',
-  tool: 'line',  // 'bbox' | 'line'
+  tool: 'select',  // 'select' | 'bbox' | 'line' | 'roi' | 'occ'
   upload: null,
   uploadFile: null,
   frameIndex: 0,
@@ -747,11 +747,12 @@ const state = {
   line: null,
   lineDrawing: null,
   lineEndpointDrag: null,
-  selectedBboxIdx: null,           // index in state.bboxes of currently selected one
-  bboxDrag: null,                  // {mode: 'move'|'resize', corner?: 'tl|tr|bl|br', orig, offset}
-  rois: [],                        // multi-ROI occupancy. Each: {id, name, points, color, occupancy_threshold}
+  selectedBboxIdx: null,
+  bboxDrag: null,
+  vertexDrag: null,                // {kind: 'roi'|'occ'|'line', zoneIdx?, vertexIdx, endpoint?}
+  rois: [],
   activeRoiId: null,
-  svgCursor: null,                 // last cursor position over the SVG in image coords
+  svgCursor: null,
   roi: null,           // [[x,y], ...]
   roiDrawing: null,    // [[x,y], ...] in-progress
   roiCursor: null,     // [x,y] for preview line endpoint
@@ -949,9 +950,10 @@ function applySession(s) {
   state.initialRates = s.initial_rates || {};
   // Update UI
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.mode === state.mode));
-  $('mode-text').style.display = state.mode === 'text' ? 'block' : 'none';
-  $('mode-visual').style.display = state.mode === 'visual' ? 'block' : 'none';
-  $('tool-bbox').disabled = state.mode !== 'visual';
+  const isYoloApply = state.modelType !== 'yoloe';
+  $('mode-text').style.display = (!isYoloApply && state.mode === 'text') ? 'block' : 'none';
+  $('mode-visual').style.display = (!isYoloApply && state.mode === 'visual') ? 'block' : 'none';
+  $('tool-bbox').disabled = isYoloApply || state.mode !== 'visual';
   renderClasses();
   renderOverlay();
   updateRoiButtons();
@@ -1220,11 +1222,11 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   state.mode = t.dataset.mode;
-  $('mode-text').style.display = state.mode === 'text' ? 'block' : 'none';
-  $('mode-visual').style.display = state.mode === 'visual' ? 'block' : 'none';
-  $('tool-bbox').disabled = state.mode !== 'visual';
-  $('tool-select').disabled = state.mode !== 'visual';
-  if (state.mode !== 'visual' && (state.tool === 'bbox' || state.tool === 'select')) setTool('line');
+  const isYoloTab = state.modelType !== 'yoloe';
+  $('mode-text').style.display = (!isYoloTab && state.mode === 'text') ? 'block' : 'none';
+  $('mode-visual').style.display = (!isYoloTab && state.mode === 'visual') ? 'block' : 'none';
+  $('tool-bbox').disabled = isYoloTab || state.mode !== 'visual';
+  if (state.mode !== 'visual' && state.tool === 'bbox') setTool('select');
   updateHint();
   scheduleSave();
 }));
@@ -1252,7 +1254,7 @@ function updateHint() {
   if (state.tool === 'line') h.textContent = 'Línea · drag para crear. Si hay una, drag cerca de un extremo lo mueve. Ctrl+Z deshace.';
   else if (state.tool === 'roi') h.textContent = 'ROI (filtro) · click o tecla C agrega vértice en la posición del cursor · "Cerrar polígono" o doble-click finaliza · Esc cancela.';
   else if (state.tool === 'occ') h.textContent = 'Ocupación · click o tecla C agrega vértice · "Cerrar polígono" o doble-click finaliza · Esc cancela. Podés agregar varias zonas.';
-  else if (state.tool === 'select') h.textContent = 'Selección · click un bbox para seleccionar. Drag al centro lo mueve, drag las esquinitas lo redimensiona. Del/Backspace borra. ESC deselecciona.';
+  else if (state.tool === 'select') h.textContent = 'Selección · drag un vértice de polígono o un extremo de línea para moverlos. Click bbox para seleccionar (drag centro = mover, esquina = redimensionar). Del/Backspace borra el bbox seleccionado.';
   else h.textContent = 'Bbox · drag para marcar ejemplos. Alt+click borra un bbox. Ctrl+Z deshace.';
 }
 function updateRoiButtons() {
@@ -1632,20 +1634,51 @@ svg.addEventListener('pointerdown', (e) => {
   svg.setPointerCapture(e.pointerId);
   const p = svgPoint(e);
   if (state.tool === 'select') {
-    // Hit-test: find topmost bbox at p (only on current frame)
     const R = Math.max(state.upload.width, state.upload.height) * 0.03;
+    // 1) Line endpoints
+    if (state.line) {
+      const d1 = Math.hypot(p.x - state.line.x1, p.y - state.line.y1);
+      const d2 = Math.hypot(p.x - state.line.x2, p.y - state.line.y2);
+      if (d1 < R || d2 < R) {
+        pushHistory();
+        state.vertexDrag = { kind: 'line', endpoint: d1 <= d2 ? 'start' : 'end' };
+        return;
+      }
+    }
+    // 2) Single filter ROI vertices
+    if (state.roi) {
+      for (let v = 0; v < state.roi.length; v++) {
+        const [vx, vy] = state.roi[v];
+        if (Math.hypot(p.x - vx, p.y - vy) < R) {
+          pushHistory();
+          state.vertexDrag = { kind: 'roi', vertexIdx: v };
+          return;
+        }
+      }
+    }
+    // 3) Occupancy zones vertices
+    for (let zi = 0; zi < state.rois.length; zi++) {
+      const zone = state.rois[zi];
+      for (let v = 0; v < zone.points.length; v++) {
+        const [vx, vy] = zone.points[v];
+        if (Math.hypot(p.x - vx, p.y - vy) < R) {
+          pushHistory();
+          state.vertexDrag = { kind: 'occ', zoneIdx: zi, vertexIdx: v };
+          return;
+        }
+      }
+    }
+    // 4) Bboxes (existing behavior)
     let hitIdx = null, hitCorner = null;
     for (let i = state.bboxes.length - 1; i >= 0; i--) {
       const b = state.bboxes[i];
       if ((b.frame_index ?? 0) !== state.frameIndex) continue;
-      // Check corners first (priority for resize)
       const corners = {tl:[b.x1,b.y1], tr:[b.x2,b.y1], bl:[b.x1,b.y2], br:[b.x2,b.y2]};
       let nearCorner = null;
       for (const [k, [cx, cy]] of Object.entries(corners)) {
         if (Math.hypot(p.x - cx, p.y - cy) < R) { nearCorner = k; break; }
       }
       if (nearCorner) { hitIdx = i; hitCorner = nearCorner; break; }
-      // Inside?
       if (p.x >= b.x1 && p.x <= b.x2 && p.y >= b.y1 && p.y <= b.y2) {
         hitIdx = i; break;
       }
@@ -1661,8 +1694,7 @@ svg.addEventListener('pointerdown', (e) => {
     if (hitCorner) {
       state.bboxDrag = { mode: 'resize', corner: hitCorner, idx: hitIdx };
     } else {
-      state.bboxDrag = { mode: 'move', idx: hitIdx,
-                         offset: { dx: p.x - b.x1, dy: p.y - b.y1 } };
+      state.bboxDrag = { mode: 'move', idx: hitIdx, offset: { dx: p.x - b.x1, dy: p.y - b.y1 } };
     }
     renderOverlay();
     return;
@@ -1699,6 +1731,18 @@ svg.addEventListener('pointermove', (e) => {
     const p = svgPoint(e);
     if (state.lineEndpointDrag === 'start') { state.line.x1 = p.x; state.line.y1 = p.y; }
     else { state.line.x2 = p.x; state.line.y2 = p.y; }
+    renderOverlay();
+  } else if (state.vertexDrag) {
+    const p = svgPoint(e);
+    const v = state.vertexDrag;
+    if (v.kind === 'line' && state.line) {
+      if (v.endpoint === 'start') { state.line.x1 = p.x; state.line.y1 = p.y; }
+      else { state.line.x2 = p.x; state.line.y2 = p.y; }
+    } else if (v.kind === 'roi' && state.roi) {
+      state.roi[v.vertexIdx] = [p.x, p.y];
+    } else if (v.kind === 'occ' && state.rois[v.zoneIdx]) {
+      state.rois[v.zoneIdx].points[v.vertexIdx] = [p.x, p.y];
+    }
     renderOverlay();
   } else if (state.bboxDrag) {
     const p = svgPoint(e);
@@ -1740,6 +1784,9 @@ svg.addEventListener('pointerup', (e) => {
     }
   } else if (state.lineEndpointDrag) {
     state.lineEndpointDrag = null;
+    changed = true;
+  } else if (state.vertexDrag) {
+    state.vertexDrag = null;
     changed = true;
   } else if (state.bboxDrag) {
     // Normalize coords (resize could flip them)
