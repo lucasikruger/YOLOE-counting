@@ -836,6 +836,7 @@ function applySession(s) {
       points: (r.points || []).map(p => [...p]),
       color: r.color || '#60a5fa',
       occupancy_threshold: r.occupancy_threshold || 1,
+      label_position: r.label_position || 'center',
     }));
   } else {
     state.rois = [];
@@ -1260,6 +1261,7 @@ function closeRoi() {
       points: state.roiDrawing,
       color: palette[idx % palette.length],
       occupancy_threshold: 1,
+      label_position: 'center',
     });
     state.activeRoiId = id;
     renderRoiList();
@@ -1351,6 +1353,7 @@ function renderRoiList() {
     row.className = 'class-row' + (r.id === state.activeRoiId ? ' active' : '');
     const upDisabled = i === 0 ? 'disabled' : '';
     const downDisabled = i === state.rois.length - 1 ? 'disabled' : '';
+    const pos = r.label_position || 'center';
     row.innerHTML = `
       <div style="display:flex; flex-direction:column; gap:1px">
         <button type="button" class="icon up" title="Mover arriba" ${upDisabled} style="padding:0 4px; font-size:11px">▲</button>
@@ -1358,14 +1361,22 @@ function renderRoiList() {
       </div>
       <input type="color" class="swatch" value="${r.color}" title="Color" />
       <input type="text" placeholder="nombre" value="${escapeAttr(r.name)}" />
+      <select class="lp" title="Posición del label" style="width:auto; padding:2px 4px; font-size:12px">
+        <option value="center" ${pos==='center'?'selected':''}>Centro</option>
+        <option value="top" ${pos==='top'?'selected':''}>Arriba</option>
+        <option value="bottom" ${pos==='bottom'?'selected':''}>Abajo</option>
+        <option value="left" ${pos==='left'?'selected':''}>Izq</option>
+        <option value="right" ${pos==='right'?'selected':''}>Der</option>
+      </select>
       <div class="count">#${i+1} · umbral <input type="number" min="1" max="50" value="${r.occupancy_threshold || 1}" style="width:50px; padding:2px 4px; font-size:12px" /></div>
       <button type="button" class="icon">×</button>`;
-    const [arrows, sw, nameInput, countDiv, del] = row.children;
+    const [arrows, sw, nameInput, posSel, countDiv, del] = row.children;
     const upBtn = arrows.querySelector('.up');
     const downBtn = arrows.querySelector('.down');
     const thrInput = countDiv.querySelector('input');
     sw.addEventListener('input', (e) => { r.color = e.target.value; renderOverlay(); scheduleSave(); });
     nameInput.addEventListener('input', (e) => { r.name = e.target.value; renderOverlay(); scheduleSave(); });
+    posSel.addEventListener('change', (e) => { r.label_position = e.target.value; renderOverlay(); scheduleSave(); });
     thrInput.addEventListener('input', (e) => { r.occupancy_threshold = Math.max(1, +e.target.value || 1); scheduleSave(); });
     upBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1389,7 +1400,8 @@ function renderRoiList() {
       renderRoiList(); renderOverlay(); updateRoiButtons(); scheduleSave();
     });
     row.addEventListener('click', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target === del || e.target === upBtn || e.target === downBtn) return;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' ||
+          e.target === del || e.target === upBtn || e.target === downBtn) return;
       state.activeRoiId = r.id; renderRoiList();
     });
     list.appendChild(row);
@@ -1896,9 +1908,8 @@ function renderOverlay() {
     const pts = r.points.map(p => `${p[0]},${p[1]}`).join(' ');
     parts.push(`<polygon points="${pts}" fill="${r.color}" fill-opacity="0.10" stroke="${r.color}" stroke-width="2" />`);
     if (r.name) {
-      const cx = r.points.reduce((s, p) => s + p[0], 0) / r.points.length;
-      const cy = r.points.reduce((s, p) => s + p[1], 0) / r.points.length;
-      parts.push(`<text x="${cx}" y="${cy}" text-anchor="middle" fill="${r.color}">${escapeHtml(r.name)}</text>`);
+      const [rx, ry, anc] = roiLabelPos(r.points, r.label_position || 'center');
+      parts.push(`<text x="${rx}" y="${ry}" text-anchor="${anc}" fill="${r.color}">${escapeHtml(r.name)}</text>`);
     }
   });
   // ROI / Ocupación in-progress
@@ -1950,6 +1961,7 @@ function buildJobForm() {
   fd.append('rois', JSON.stringify(state.rois.map(r => ({
     name: r.name, points: r.points, color: r.color,
     occupancy_threshold: r.occupancy_threshold || 1,
+    label_position: r.label_position || 'center',
   }))));
   fd.append('show_roi_panel', $('roi-panel-show').checked ? 'true' : 'false');
   fd.append('roi_panel_corner', $('roi-panel-corner').value);
@@ -2056,11 +2068,17 @@ $('submit').addEventListener('click', async () => {
   $('counts').style.display = 'none'; $('counts-grid').innerHTML = '';
 
   // Client-side validation con error visible
-  if (state.mode === 'text' && !$('prompts').value.trim()) {
-    showConfigError('Escribí al menos un prompt.'); submit.disabled = false; return;
-  }
-  if (state.mode === 'visual' && state.bboxes.length === 0) {
-    showConfigError('Dibujá al menos un bbox con la herramienta Bbox.'); submit.disabled = false; return;
+  if (state.modelType === 'yoloe') {
+    if (state.mode === 'text' && !$('prompts').value.trim()) {
+      showConfigError('Escribí al menos un prompt.'); submit.disabled = false; return;
+    }
+    if (state.mode === 'visual' && state.bboxes.length === 0) {
+      showConfigError('Dibujá al menos un bbox con la herramienta Bbox.'); submit.disabled = false; return;
+    }
+  } else {
+    if (state.yoloClassIds.length === 0) {
+      showConfigError('Seleccioná al menos una clase del modelo en el panel de "Clases a detectar".'); submit.disabled = false; return;
+    }
   }
 
   let resp;

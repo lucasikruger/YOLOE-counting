@@ -681,6 +681,7 @@ def run_stream(
             "points": pts,
             "color_rgb": rgb,
             "threshold": int(r.get("occupancy_threshold", 1) or 1),
+            "label_position": str(r.get("label_position") or "center"),
             "zone": zone,
             "annotator": annotator,
         })
@@ -846,9 +847,8 @@ def run_stream(
                     cv2.polylines(scene, [pts], True, (0, 0, 0), 4, lineType=cv2.LINE_AA)
                 scene = r["annotator"].annotate(scene=scene)
                 if r["name"]:
-                    pts = np.array(r["points"], dtype=np.int32)
-                    cx, cy = int(pts[:, 0].mean()), int(pts[:, 1].mean())
-                    _draw_label(scene, r["name"], (cx, cy), r["color_rgb"])
+                    pos = _roi_label_pos(r["points"], r.get("label_position", "center"))
+                    _draw_label(scene, r["name"], pos, r["color_rgb"])
             if line_zone is not None:
                 if cfg.outline_line:
                     cv2.line(scene,
