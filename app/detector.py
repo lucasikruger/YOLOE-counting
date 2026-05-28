@@ -299,8 +299,10 @@ def _draw_roi_status_panel(img, rois: list[dict], occupancy: dict[str, dict], cf
         bgr = (rgb[2], rgb[1], rgb[0])
         cv2.rectangle(img, (cx0, cy0), (cx0 + cell_w, cy0 + cell_h), bgr, -1)
         cv2.rectangle(img, (cx0, cy0), (cx0 + cell_w, cy0 + cell_h), (0, 0, 0), 1)
-        # ROI name at top-left
+        # ROI name at top-left with black outline so it stays readable on any fill
         name = r["name"][:20]
+        cv2.putText(img, name, (cx0 + 6, cy0 + 18), font, name_scale,
+                    (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(img, name, (cx0 + 6, cy0 + 18), font, name_scale,
                     (255, 255, 255), 1, cv2.LINE_AA)
         # Status text centered
