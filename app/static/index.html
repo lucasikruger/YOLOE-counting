@@ -1831,8 +1831,10 @@ function roiLabelPos(poly, pos) {
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const cx = xs.reduce((a,b)=>a+b,0)/xs.length, cy = ys.reduce((a,b)=>a+b,0)/ys.length;
-  if (pos === 'top')    return [cx, minY + 14, 'middle'];
-  if (pos === 'bottom') return [cx, maxY - 8,  'middle'];
+  // 'top'/'bottom' sit OUTSIDE the polygon so the text never overlaps the stroke.
+  // In SVG the text anchor y is the baseline; subtract for above, add for below.
+  if (pos === 'top')    return [cx, minY - 6,  'middle'];
+  if (pos === 'bottom') return [cx, maxY + 18, 'middle'];
   if (pos === 'left')   return [minX + 30, cy, 'start'];
   if (pos === 'right')  return [maxX - 30, cy, 'end'];
   return [cx, cy, 'middle'];

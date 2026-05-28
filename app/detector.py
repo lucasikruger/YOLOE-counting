@@ -221,12 +221,18 @@ def _line_label_pos(line, position: str) -> tuple[int, int]:
 
 
 def _roi_label_pos(roi, position: str) -> tuple[int, int]:
+    """Label anchor in *center* terms (cv2 uses center; SVG can ignore the offset)."""
     pts = np.array(roi, dtype=np.int32)
     xs, ys = pts[:, 0], pts[:, 1]
     if position == "top":
-        return int(xs.mean()), int(ys.min() + 14)
+        # Label sits OUTSIDE above the polygon, with a small gap so it doesn't
+        # overlap the stroke. Text height with scale 0.6 is ~16 px; center.y
+        # equal to ys.min() - 12 places the text bottom 4 px above the line.
+        return int(xs.mean()), int(ys.min() - 12)
     if position == "bottom":
-        return int(xs.mean()), int(ys.max() - 8)
+        # Outside below — center.y = ys.max() + 14 keeps the text top about
+        # 6 px below the line.
+        return int(xs.mean()), int(ys.max() + 14)
     if position == "left":
         return int(xs.min() + 30), int(ys.mean())
     if position == "right":
