@@ -50,6 +50,11 @@ class StreamConfig:
     # Optional labels for line and ROI overlays
     line_label: str = ""
     roi_label: str = ""
+    # Line counter display
+    in_label: str = "in"
+    out_label: str = "out"
+    show_in: bool = True
+    show_out: bool = True
     # Colors (hex strings "#RRGGBB"). Empty = use defaults.
     line_color: str = "#f472b6"
     roi_color: str = "#60a5fa"
@@ -373,6 +378,10 @@ def run_stream(
         line_annotator = sv.LineZoneAnnotator(
             thickness=2, text_thickness=1, text_scale=0.6, text_padding=4,
             color=sv.Color(*line_rgb),
+            custom_in_text=cfg.in_label or "in",
+            custom_out_text=cfg.out_label or "out",
+            display_in_count=cfg.show_in,
+            display_out_count=cfg.show_out,
         )
 
     roi_zone = None

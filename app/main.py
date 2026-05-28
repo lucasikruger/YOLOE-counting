@@ -298,6 +298,10 @@ async def create_job(
     show_conf: bool = Form(True),
     line_label: str = Form(""),
     roi_label: str = Form(""),
+    in_label: str = Form("in"),
+    out_label: str = Form("out"),
+    show_in: bool = Form(True),
+    show_out: bool = Form(True),
     line_color: str = Form("#f472b6"),
     roi_color: str = Form("#60a5fa"),
     show_counts_overlay: bool = Form(False),
@@ -361,6 +365,8 @@ async def create_job(
         class_colors=[c.strip() for c in class_colors.split(",") if c.strip()],
         show_legend=show_legend,
         legend_corner=legend_corner if legend_corner in ("TL","TR","BL","BR") else "TR",
+        in_label=in_label, out_label=out_label,
+        show_in=show_in, show_out=show_out,
     )
 
     if mode == "text":

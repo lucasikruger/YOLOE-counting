@@ -211,7 +211,7 @@
 
     <div id="line-config" style="display:none; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap">
       <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">Línea</span>
-      <input id="line-label" type="text" placeholder="Etiqueta (opcional)" style="flex:1; min-width:140px; max-width:260px" />
+      <input id="line-label" type="text" placeholder="Etiqueta (opcional)" style="flex:1; min-width:120px; max-width:200px" />
       <select id="line-label-position" style="width:auto" title="Posición del label">
         <option value="above">Arriba</option>
         <option value="below">Abajo</option>
@@ -219,6 +219,16 @@
         <option value="end">Fin</option>
       </select>
       <input id="line-color" type="color" value="#f472b6" style="width:38px; height:30px; padding:0; border:1px solid var(--border); border-radius:6px; background:transparent" />
+      <button type="button" class="ghost" id="swap-line" title="Invertir dirección (intercambia IN/OUT)">⇄ Invertir</button>
+    </div>
+    <div id="line-counter-config" style="display:none; align-items:center; gap:10px; margin-top:6px; flex-wrap:wrap; padding-left:54px">
+      <input id="in-label" type="text" placeholder="Label IN" value="in" style="width:100px" />
+      <input id="show-in" type="checkbox" checked style="width:auto; margin:0" />
+      <label for="show-in" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:13px; cursor:pointer">mostrar IN</label>
+      <span style="color:var(--muted)">·</span>
+      <input id="out-label" type="text" placeholder="Label OUT" value="out" style="width:100px" />
+      <input id="show-out" type="checkbox" checked style="width:auto; margin:0" />
+      <label for="show-out" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:13px; cursor:pointer">mostrar OUT</label>
     </div>
     <div id="roi-config" style="display:none; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap">
       <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">ROI</span>
@@ -545,6 +555,10 @@ function applySession(s) {
   if (s.show_conf != null) $('show-conf').checked = !!s.show_conf;
   $('line-label').value = s.line_label || '';
   $('roi-label').value = s.roi_label || '';
+  $('in-label').value = s.in_label || 'in';
+  $('out-label').value = s.out_label || 'out';
+  $('show-in').checked = s.show_in !== false;
+  $('show-out').checked = s.show_out !== false;
   $('line-color').value = s.line_color || '#f472b6';
   $('roi-color').value = s.roi_color || '#60a5fa';
   $('show-counts-overlay').checked = !!s.show_counts_overlay;
@@ -591,6 +605,10 @@ function snapshotSession() {
     show_conf: $('show-conf').checked,
     line_label: $('line-label').value,
     roi_label: $('roi-label').value,
+    in_label: $('in-label').value,
+    out_label: $('out-label').value,
+    show_in: $('show-in').checked,
+    show_out: $('show-out').checked,
     line_color: $('line-color').value,
     roi_color: $('roi-color').value,
     show_counts_overlay: $('show-counts-overlay').checked,
@@ -731,14 +749,21 @@ function updateRoiButtons() {
   $('close-roi').style.display = (isRoiTool && state.roiDrawing && state.roiDrawing.length >= 3) ? 'inline-block' : 'none';
   $('clear-roi').style.display = (isRoiTool && state.roi) ? 'inline-block' : 'none';
   $('clear-line').style.display = (state.tool === 'line' && state.line) ? 'inline-block' : 'none';
-  // Mostrar config (label/color) cuando la entidad existe o el tool está activo
   $('line-config').style.display = (state.line || state.tool === 'line') ? 'flex' : 'none';
+  $('line-counter-config').style.display = state.line ? 'flex' : 'none';
   $('roi-config').style.display = (state.roi || state.tool === 'roi') ? 'flex' : 'none';
 }
 
 $('clear-line').addEventListener('click', () => {
   if (state.line) { pushHistory(); state.line = null; renderOverlay(); scheduleSave(); }
   $('clear-line').style.display = 'none';
+});
+$('swap-line').addEventListener('click', () => {
+  if (!state.line) return;
+  pushHistory();
+  const l = state.line;
+  state.line = { x1: l.x2, y1: l.y2, x2: l.x1, y2: l.y1 };
+  renderOverlay(); scheduleSave();
 });
 $('close-roi').addEventListener('click', closeRoi);
 $('clear-roi').addEventListener('click', () => {
@@ -1056,9 +1081,35 @@ function renderOverlay() {
   // line
   if (state.line) {
     const lc = $('line-color').value;
-    parts.push(`<line x1="${state.line.x1}" y1="${state.line.y1}" x2="${state.line.x2}" y2="${state.line.y2}" stroke="${lc}" />`);
-    parts.push(`<circle cx="${state.line.x1}" cy="${state.line.y1}" r="6" fill="${lc}"/>`);
-    parts.push(`<circle cx="${state.line.x2}" cy="${state.line.y2}" r="6" fill="${lc}"/>`);
+    const L = state.line;
+    parts.push(`<line x1="${L.x1}" y1="${L.y1}" x2="${L.x2}" y2="${L.y2}" stroke="${lc}" />`);
+    parts.push(`<circle cx="${L.x1}" cy="${L.y1}" r="6" fill="${lc}"/>`);
+    parts.push(`<circle cx="${L.x2}" cy="${L.y2}" r="6" fill="${lc}"/>`);
+    // IN side indicator: per supervision, cross_product > 0 = LEFT of vector (start→end)
+    // = perpendicular (-dy, dx) direction. Draw arrow + IN/OUT labels.
+    const mx = (L.x1 + L.x2) / 2, my = (L.y1 + L.y2) / 2;
+    const dx = L.x2 - L.x1, dy = L.y2 - L.y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const perpX = -dy / len, perpY = dx / len;        // left of direction
+    const arrowLen = 28, headSize = 8;
+    const ax = mx + perpX * arrowLen, ay = my + perpY * arrowLen;
+    // Arrow shaft
+    parts.push(`<line x1="${mx}" y1="${my}" x2="${ax}" y2="${ay}" stroke="${lc}" stroke-width="3" vector-effect="non-scaling-stroke"/>`);
+    // Arrow head (triangle)
+    const tx = perpY, ty = -perpX;  // 90° rotation for head wings
+    const h1x = ax - perpX*headSize + tx*headSize*0.6;
+    const h1y = ay - perpY*headSize + ty*headSize*0.6;
+    const h2x = ax - perpX*headSize - tx*headSize*0.6;
+    const h2y = ay - perpY*headSize - ty*headSize*0.6;
+    parts.push(`<polygon points="${ax},${ay} ${h1x},${h1y} ${h2x},${h2y}" fill="${lc}"/>`);
+    // IN label (at arrow tip), OUT label (opposite)
+    const inLbl = $('in-label').value.trim() || 'in';
+    const outLbl = $('out-label').value.trim() || 'out';
+    const inX = mx + perpX * (arrowLen + 14), inY = my + perpY * (arrowLen + 14);
+    const outX = mx - perpX * 16, outY = my - perpY * 16;
+    parts.push(`<text x="${inX}" y="${inY}" text-anchor="middle" fill="${lc}" font-weight="700">${escapeHtml(inLbl).toUpperCase()}</text>`);
+    parts.push(`<text x="${outX}" y="${outY}" text-anchor="middle" fill="${lc}" opacity="0.7">${escapeHtml(outLbl).toUpperCase()}</text>`);
+    // User-supplied line label
     const ll = $('line-label').value.trim();
     if (ll) {
       const [lx, ly, anc] = lineLabelPos(state.line, $('line-label-position').value);
@@ -1114,6 +1165,10 @@ function buildJobForm() {
   fd.append('show_conf', $('show-conf').checked ? 'true' : 'false');
   fd.append('line_label', $('line-label').value);
   fd.append('roi_label', $('roi-label').value);
+  fd.append('in_label', $('in-label').value);
+  fd.append('out_label', $('out-label').value);
+  fd.append('show_in', $('show-in').checked ? 'true' : 'false');
+  fd.append('show_out', $('show-out').checked ? 'true' : 'false');
   fd.append('line_color', $('line-color').value);
   fd.append('roi_color', $('roi-color').value);
   fd.append('show_counts_overlay', $('show-counts-overlay').checked ? 'true' : 'false');
@@ -1281,6 +1336,7 @@ updateHint();
  'show-legend', 'legend-corner',
  't-act', 't-lost', 't-match', 't-min',
  'line-label', 'roi-label', 'line-color', 'roi-color',
+ 'in-label', 'out-label', 'show-in', 'show-out',
  'show-counts-overlay', 'counts-corner',
  'bbox-label-position', 'line-label-position', 'roi-label-position'].forEach(id => {
   const el = $(id);
@@ -1292,7 +1348,8 @@ updateHint();
 // Live-update SVG overlay when label / color / position changes
 ['line-label', 'roi-label', 'line-color', 'roi-color',
  'line-label-position', 'roi-label-position',
- 'bbox-label-position'].forEach(id => {
+ 'bbox-label-position',
+ 'in-label', 'out-label'].forEach(id => {
   $(id).addEventListener('input', renderOverlay);
   $(id).addEventListener('change', renderOverlay);
 });
