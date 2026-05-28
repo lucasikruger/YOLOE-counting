@@ -1004,8 +1004,8 @@ function setTool(t) {
 function updateHint() {
   const h = $('tool-hint');
   if (state.tool === 'line') h.textContent = 'Línea · drag para crear. Si hay una, drag cerca de un extremo lo mueve. Ctrl+Z deshace.';
-  else if (state.tool === 'roi') h.textContent = 'ROI (filtro) · click para agregar vértices, "Cerrar polígono" o doble-click para finalizar. Una sola ROI — filtra detecciones a su interior. Esc cancela.';
-  else if (state.tool === 'occ') h.textContent = 'Ocupación · click para agregar vértices, "Cerrar polígono" o doble-click para finalizar. Cada polígono cerrado es una zona independiente. Podés agregar varias.';
+  else if (state.tool === 'roi') h.textContent = 'ROI (filtro) · click agrega vértices · tecla C, doble-click o "Cerrar polígono" finaliza · Esc cancela. Una sola ROI — filtra detecciones a su interior.';
+  else if (state.tool === 'occ') h.textContent = 'Ocupación · click agrega vértices · tecla C, doble-click o "Cerrar polígono" finaliza · Esc cancela. Cada polígono cerrado es una zona independiente; podés agregar varias.';
   else if (state.tool === 'select') h.textContent = 'Selección · click un bbox para seleccionar. Drag al centro lo mueve, drag las esquinitas lo redimensiona. Del/Backspace borra. ESC deselecciona.';
   else h.textContent = 'Bbox · drag para marcar ejemplos. Alt+click borra un bbox. Ctrl+Z deshace.';
 }
@@ -1515,9 +1515,15 @@ svg.addEventListener('dblclick', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  const ae = document.activeElement;
+  const inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
   if (e.key === 'Escape' && state.roiDrawing) {
     state.roiDrawing = null; state.roiCursor = null;
     renderOverlay(); updateRoiButtons();
+  } else if (!inField && (e.key === 'c' || e.key === 'C') &&
+             state.roiDrawing && state.roiDrawing.length >= 3) {
+    e.preventDefault();
+    closeRoi();
   }
 });
 
