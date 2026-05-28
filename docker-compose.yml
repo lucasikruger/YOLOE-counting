@@ -4,7 +4,7 @@ services:
     image: yoloe-counting:latest
     container_name: yoloe-counting
     ports:
-      - "8001:8000"
+      - "8091:8000"
     volumes:
       - ./data:/app/data
       - ./app:/app/app   # bind para iterar sin rebuild
