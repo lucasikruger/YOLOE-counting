@@ -639,6 +639,7 @@ const state = {
   bboxDrag: null,                  // {mode: 'move'|'resize', corner?: 'tl|tr|bl|br', orig, offset}
   rois: [],                        // multi-ROI occupancy. Each: {id, name, points, color, occupancy_threshold}
   activeRoiId: null,
+  svgCursor: null,                 // last cursor position over the SVG in image coords
   roi: null,           // [[x,y], ...]
   roiDrawing: null,    // [[x,y], ...] in-progress
   roiCursor: null,     // [x,y] for preview line endpoint
@@ -1004,8 +1005,8 @@ function setTool(t) {
 function updateHint() {
   const h = $('tool-hint');
   if (state.tool === 'line') h.textContent = 'Línea · drag para crear. Si hay una, drag cerca de un extremo lo mueve. Ctrl+Z deshace.';
-  else if (state.tool === 'roi') h.textContent = 'ROI (filtro) · click agrega vértices · tecla C, doble-click o "Cerrar polígono" finaliza · Esc cancela. Una sola ROI — filtra detecciones a su interior.';
-  else if (state.tool === 'occ') h.textContent = 'Ocupación · click agrega vértices · tecla C, doble-click o "Cerrar polígono" finaliza · Esc cancela. Cada polígono cerrado es una zona independiente; podés agregar varias.';
+  else if (state.tool === 'roi') h.textContent = 'ROI (filtro) · click o tecla C agrega vértice en la posición del cursor · "Cerrar polígono" o doble-click finaliza · Esc cancela.';
+  else if (state.tool === 'occ') h.textContent = 'Ocupación · click o tecla C agrega vértice · "Cerrar polígono" o doble-click finaliza · Esc cancela. Podés agregar varias zonas.';
   else if (state.tool === 'select') h.textContent = 'Selección · click un bbox para seleccionar. Drag al centro lo mueve, drag las esquinitas lo redimensiona. Del/Backspace borra. ESC deselecciona.';
   else h.textContent = 'Bbox · drag para marcar ejemplos. Alt+click borra un bbox. Ctrl+Z deshace.';
 }
@@ -1407,6 +1408,11 @@ svg.addEventListener('pointerdown', (e) => {
   renderOverlay();
 });
 svg.addEventListener('pointermove', (e) => {
+  // Track cursor over SVG (in image coords) at all times — used by keyboard shortcuts
+  if (state.upload) {
+    const p = svgPoint(e);
+    state.svgCursor = [p.x, p.y];
+  }
   if (state.drawing) {
     const p = svgPoint(e); state.drawing.x2 = p.x; state.drawing.y2 = p.y; renderOverlay();
   } else if (state.lineDrawing) {
@@ -1520,10 +1526,18 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.roiDrawing) {
     state.roiDrawing = null; state.roiCursor = null;
     renderOverlay(); updateRoiButtons();
-  } else if (!inField && (e.key === 'c' || e.key === 'C') &&
-             state.roiDrawing && state.roiDrawing.length >= 3) {
+    return;
+  }
+  // 'C' agrega un vértice en la posición actual del cursor (en ROI/Ocup)
+  if (!inField && (e.key === 'c' || e.key === 'C') &&
+      (state.tool === 'roi' || state.tool === 'occ') &&
+      state.svgCursor) {
+    if (state.tool === 'roi' && state.roi) return;
     e.preventDefault();
-    closeRoi();
+    if (!state.roiDrawing) state.roiDrawing = [];
+    state.roiDrawing.push([state.svgCursor[0], state.svgCursor[1]]);
+    state.roiCursor = [state.svgCursor[0], state.svgCursor[1]];
+    renderOverlay(); updateRoiButtons();
   }
 });
 
