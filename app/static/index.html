@@ -83,6 +83,11 @@
   .frame-wrap svg.tool-bbox { cursor: crosshair; }
   .frame-wrap svg.tool-line { cursor: crosshair; }
   .frame-wrap svg.tool-roi { cursor: copy; }
+  .frame-wrap svg.tool-select { cursor: default; }
+  .frame-wrap svg.tool-select rect.movable { cursor: move; }
+  .frame-wrap svg .handle { cursor: nwse-resize; }
+  .frame-wrap svg .handle.ne, .frame-wrap svg .handle.sw { cursor: nesw-resize; }
+  .frame-wrap svg rect.selected { stroke-width: 3 !important; stroke-dasharray: 6 3; }
   .frame-wrap svg polygon { fill-opacity: 0.10; stroke-width: 2; vector-effect: non-scaling-stroke; }
   .frame-wrap svg polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
   .frame-wrap svg rect { fill-opacity: 0.12; stroke-width: 2; vector-effect: non-scaling-stroke; }
@@ -114,8 +119,30 @@
     background: transparent; color: var(--muted); margin-top: 8px; }
   .add-class:hover { border-color: var(--accent-2); color: var(--accent-2); }
 
+  .frame-card { background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0; overflow: hidden; }
+  .frame-card.current > summary { border-color: var(--accent-2); }
+  .frame-card > summary { list-style: none; cursor: pointer; padding: 8px 10px;
+    display: flex; align-items: center; gap: 10px; }
+  .frame-card > summary::-webkit-details-marker { display: none; }
+  .frame-card > summary::before { content: '▶'; color: var(--muted); font-size: 10px;
+    transition: transform 0.1s; }
+  .frame-card[open] > summary::before { transform: rotate(90deg); }
+  .frame-card .fc-thumb { width: 120px; height: auto; border-radius: 4px; object-fit: cover;
+    background: #000; flex-shrink: 0; }
+  .frame-card .fc-meta { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .frame-card .fc-label { font-family: ui-monospace, monospace; font-size: 13px; color: var(--text); }
+  .frame-card .fc-sub { color: var(--muted); font-size: 12px; }
+  .frame-card .fc-crops { display: flex; gap: 4px; flex-wrap: wrap; }
+  .frame-card .fc-crops img { width: 32px; height: 24px; border-radius: 3px; object-fit: cover; background: #000; }
+  .frame-card .fc-jump { background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 6px; padding: 5px 9px; font-size: 12px; cursor: pointer; }
+  .frame-card .fc-jump:hover { color: var(--accent-2); border-color: var(--accent-2); }
+  .frame-card .fc-body { padding: 8px 10px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 6px; }
+
   .bbox-row { display: flex; align-items: center; gap: 10px; padding: 5px 10px;
-    background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px; font-size: 13px; cursor: pointer; }
+    background: var(--bg); border: 1px solid var(--border); border-radius: 7px; font-size: 13px; cursor: pointer; }
   .bbox-row.current { border-color: var(--accent-2); }
   .bbox-row .bn { font-family: ui-monospace, monospace; color: var(--muted); min-width: 28px; }
   .bbox-row .bsw { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
@@ -199,6 +226,7 @@
       <span class="frame-counter"><span id="frame-cur">0</span> / <span id="frame-total">0</span></span>
 
       <div class="tool-group" id="tool-group">
+        <button type="button" class="tool-btn" data-tool="select" id="tool-select" disabled>Selección</button>
         <button type="button" class="tool-btn" data-tool="bbox" id="tool-bbox" disabled>Bbox</button>
         <button type="button" class="tool-btn active" data-tool="line" id="tool-line">Línea</button>
         <button type="button" class="tool-btn" data-tool="roi" id="tool-roi">ROI</button>
@@ -257,12 +285,9 @@
       <button type="button" id="add-class" class="add-class">+ Nueva clase</button>
       <div class="hint">Tip: 2-3 ejemplos por clase mejora el matching.</div>
 
-      <label style="margin-top:18px">Frames anotados (<span id="frame-anot-count">0</span>)</label>
-      <div id="frame-anot-list" style="display:flex; flex-wrap:wrap; gap:6px"></div>
-
-      <label style="margin-top:18px">Bboxes (<span id="bbox-count">0</span>)</label>
-      <div id="bbox-list" style="display:flex; flex-direction:column; gap:6px"></div>
-      <div class="hint">Click en un bbox para saltar a su frame. Cambiá la clase con el dropdown o borrá con X. Alt+click sobre el bbox en el frame también borra.<br><b>Multi-frame</b>: podés dibujar bboxes en distintos frames. Por ahora se usa como referencia el frame con más bboxes (el resto se ignora a la hora de inferir).</div>
+      <label style="margin-top:18px">Frames anotados (<span id="frame-anot-count">0</span> · <span id="bbox-count">0</span> bboxes)</label>
+      <div id="frames-tree" style="display:flex; flex-direction:column; gap:8px"></div>
+      <div class="hint">Click en el preview del frame o en "Saltar" para ir a ese frame. Abrí el expand para ver cada bbox por separado (cambiar clase, borrar). Multi-frame: bboxes en frames distintos se promedian al inferir.</div>
     </div>
 
     <details open>
@@ -555,7 +580,9 @@ const state = {
   drawing: null,
   line: null,
   lineDrawing: null,
-  lineEndpointDrag: null,  // 'start' | 'end' when modifying an existing line
+  lineEndpointDrag: null,
+  selectedBboxIdx: null,           // index in state.bboxes of currently selected one
+  bboxDrag: null,                  // {mode: 'move'|'resize', corner?: 'tl|tr|bl|br', orig, offset}
   roi: null,           // [[x,y], ...]
   roiDrawing: null,    // [[x,y], ...] in-progress
   roiCursor: null,     // [x,y] for preview line endpoint
@@ -857,7 +884,8 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   $('mode-text').style.display = state.mode === 'text' ? 'block' : 'none';
   $('mode-visual').style.display = state.mode === 'visual' ? 'block' : 'none';
   $('tool-bbox').disabled = state.mode !== 'visual';
-  if (state.mode !== 'visual' && state.tool === 'bbox') setTool('line');
+  $('tool-select').disabled = state.mode !== 'visual';
+  if (state.mode !== 'visual' && (state.tool === 'bbox' || state.tool === 'select')) setTool('line');
   updateHint();
   scheduleSave();
 }));
@@ -871,10 +899,10 @@ function setTool(t) {
   state.tool = t;
   document.querySelectorAll('.tool-btn').forEach(x => x.classList.toggle('active', x.dataset.tool === t));
   const svg = $('frame-svg');
-  svg.classList.remove('tool-bbox', 'tool-line', 'tool-roi');
+  svg.classList.remove('tool-bbox', 'tool-line', 'tool-roi', 'tool-select');
   svg.classList.add(`tool-${t}`);
-  // Cancel in-progress ROI when leaving tool
   if (t !== 'roi') { state.roiDrawing = null; state.roiCursor = null; }
+  if (t !== 'select') { state.selectedBboxIdx = null; state.bboxDrag = null; }
   updateHint();
   updateRoiButtons();
   $('clear-line').style.display = (t === 'line' && state.line) ? 'inline-block' : 'none';
@@ -882,9 +910,10 @@ function setTool(t) {
 }
 function updateHint() {
   const h = $('tool-hint');
-  if (state.tool === 'line') h.textContent = 'Herramienta Línea · drag para crear. Si ya hay línea, drag cerca de un extremo lo mueve; lejos no hace nada (borrá para dibujar nueva). Ctrl+Z deshace.';
-  else if (state.tool === 'roi') h.textContent = 'Herramienta ROI · click para agregar vértices. Doble-click o "Cerrar polígono" para finalizar. Esc cancela.';
-  else h.textContent = 'Herramienta Bbox · drag para marcar ejemplos. Alt+click borra un bbox. Ctrl+Z deshace.';
+  if (state.tool === 'line') h.textContent = 'Línea · drag para crear. Si hay una, drag cerca de un extremo lo mueve. Ctrl+Z deshace.';
+  else if (state.tool === 'roi') h.textContent = 'ROI · click para agregar vértices. Doble-click o "Cerrar polígono" para finalizar.';
+  else if (state.tool === 'select') h.textContent = 'Selección · click un bbox para seleccionar. Drag al centro lo mueve, drag las esquinitas lo redimensiona. Del/Backspace borra. ESC deselecciona.';
+  else h.textContent = 'Bbox · drag para marcar ejemplos. Alt+click borra un bbox. Ctrl+Z deshace.';
 }
 function updateRoiButtons() {
   const isRoiTool = state.tool === 'roi';
@@ -1036,63 +1065,92 @@ function renderInitialValues() {
 }
 
 function renderBboxList() {
-  const list = $('bbox-list');
   $('bbox-count').textContent = state.bboxes.length;
-  list.innerHTML = '';
+  const tree = $('frames-tree');
+  if (!tree) return;
+  // Group bboxes by frame
+  const byFrame = new Map();
   state.bboxes.forEach((b, i) => {
-    const bFrame = b.frame_index ?? 0;
-    const row = document.createElement('div');
-    row.className = 'bbox-row' + (bFrame === state.frameIndex ? ' current' : '');
-    const opts = state.classes.map(c =>
-      `<option value="${c.id}" ${c.id === b.cls ? 'selected' : ''}>${escapeHtml(c.name?.trim() || `clase_${c.id+1}`)}</option>`
-    ).join('');
-    const cropUrl = `/api/uploads/${state.upload.upload_id}/crop?frame=${bFrame}&x1=${Math.round(b.x1)}&y1=${Math.round(b.y1)}&x2=${Math.round(b.x2)}&y2=${Math.round(b.y2)}`;
-    row.innerHTML = `
-      <div class="bn">#${i+1}</div>
-      <div class="bsw" style="background:${classColor(b.cls)}"></div>
-      <img class="thumb" loading="lazy" src="${cropUrl}" alt="" />
-      <div class="fr" title="Saltar al frame ${bFrame}">f${bFrame}</div>
-      <select>${opts}</select>
-      <div class="coords">${Math.round(b.x1)},${Math.round(b.y1)} → ${Math.round(b.x2)},${Math.round(b.y2)}</div>
-      <button type="button" class="x" title="Borrar">×</button>`;
-    const [, , , fr, sel, , del] = row.children;
-    sel.addEventListener('click', e => e.stopPropagation());
-    sel.addEventListener('change', (e) => {
-      pushHistory();
-      b.cls = +e.target.value;
-      renderOverlay(); renderClasses(); renderBboxList(); scheduleSave();
-    });
-    del.addEventListener('click', (e) => {
-      e.stopPropagation();
-      pushHistory();
-      state.bboxes.splice(i, 1);
-      renderOverlay(); renderClasses(); renderBboxList(); scheduleSave();
-    });
-    fr.addEventListener('click', (e) => { e.stopPropagation(); jumpToFrame(bFrame); });
-    row.addEventListener('click', () => jumpToFrame(bFrame));
-    row.addEventListener('mouseenter', () => highlightBbox(i, true));
-    row.addEventListener('mouseleave', () => highlightBbox(i, false));
-    list.appendChild(row);
-  });
-  renderFrameList();
-}
-
-function renderFrameList() {
-  const ul = $('frame-anot-list');
-  const counts = new Map();
-  state.bboxes.forEach(b => {
     const f = b.frame_index ?? 0;
-    counts.set(f, (counts.get(f) || 0) + 1);
+    if (!byFrame.has(f)) byFrame.set(f, []);
+    byFrame.get(f).push({ b, i });
   });
-  const frames = [...counts.keys()].sort((a, b) => a - b);
+  const frames = [...byFrame.keys()].sort((a, b) => a - b);
   $('frame-anot-count').textContent = frames.length;
-  ul.innerHTML = '';
+  // Preserve open state across re-renders
+  const openSet = new Set(
+    [...tree.querySelectorAll('details.frame-card[open]')].map(d => +d.dataset.frame)
+  );
+  tree.innerHTML = '';
+  if (frames.length === 0) {
+    tree.innerHTML = `<div class="sub">Sin bboxes todavía. Usá la herramienta Bbox para marcar ejemplos.</div>`;
+    return;
+  }
   frames.forEach(f => {
-    const chip = document.createElement('div');
-    chip.className = 'fr-chip' + (f === state.frameIndex ? ' current' : '');
-    chip.textContent = `f${f} · ${counts.get(f)}`;
-    chip.addEventListener('click', () => jumpToFrame(f));
-    ul.appendChild(chip);
+    const items = byFrame.get(f);
+    const frameUrl = `/api/uploads/${state.upload.upload_id}/frame?index=${f}`;
+    const det = document.createElement('details');
+    det.className = 'frame-card' + (f === state.frameIndex ? ' current' : '');
+    det.dataset.frame = String(f);
+    if (openSet.has(f)) det.open = true;
+    // Summary: frame thumb + label + crop chips + jump
+    const cropsHtml = items.slice(0, 6).map(({ b }) => {
+      const u = `/api/uploads/${state.upload.upload_id}/crop?frame=${f}&x1=${Math.round(b.x1)}&y1=${Math.round(b.y1)}&x2=${Math.round(b.x2)}&y2=${Math.round(b.y2)}`;
+      return `<img loading="lazy" src="${u}" style="border:1px solid ${classColor(b.cls)}" />`;
+    }).join('');
+    const extra = items.length > 6 ? `<span class="fc-sub">+${items.length - 6}</span>` : '';
+    det.innerHTML = `
+      <summary>
+        <img class="fc-thumb" loading="lazy" src="${frameUrl}" alt="" />
+        <div class="fc-meta">
+          <div class="fc-label">frame ${f} · ${items.length} bbox${items.length === 1 ? '' : 'es'}</div>
+          <div class="fc-crops">${cropsHtml}${extra}</div>
+        </div>
+        <button type="button" class="fc-jump">Saltar</button>
+      </summary>
+      <div class="fc-body"></div>
+    `;
+    const summary = det.querySelector('summary');
+    const jumpBtn = det.querySelector('.fc-jump');
+    const thumb = det.querySelector('.fc-thumb');
+    const body = det.querySelector('.fc-body');
+    jumpBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); jumpToFrame(f); });
+    thumb.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); jumpToFrame(f); });
+    // Build full bbox rows in body
+    items.forEach(({ b, i }) => {
+      const row = document.createElement('div');
+      row.className = 'bbox-row' + ((b.frame_index ?? 0) === state.frameIndex ? ' current' : '');
+      const opts = state.classes.map(c =>
+        `<option value="${c.id}" ${c.id === b.cls ? 'selected' : ''}>${escapeHtml(c.name?.trim() || `clase_${c.id+1}`)}</option>`
+      ).join('');
+      const cropUrl = `/api/uploads/${state.upload.upload_id}/crop?frame=${f}&x1=${Math.round(b.x1)}&y1=${Math.round(b.y1)}&x2=${Math.round(b.x2)}&y2=${Math.round(b.y2)}`;
+      row.innerHTML = `
+        <div class="bn">#${i+1}</div>
+        <div class="bsw" style="background:${classColor(b.cls)}"></div>
+        <img class="thumb" loading="lazy" src="${cropUrl}" alt="" />
+        <select>${opts}</select>
+        <div class="coords">${Math.round(b.x1)},${Math.round(b.y1)} → ${Math.round(b.x2)},${Math.round(b.y2)}</div>
+        <button type="button" class="x" title="Borrar">×</button>`;
+      const sel = row.querySelector('select');
+      const del = row.querySelector('button.x');
+      sel.addEventListener('click', e => e.stopPropagation());
+      sel.addEventListener('change', (e) => {
+        pushHistory();
+        b.cls = +e.target.value;
+        renderOverlay(); renderClasses(); scheduleSave();
+      });
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushHistory();
+        state.bboxes.splice(i, 1);
+        renderOverlay(); renderClasses(); scheduleSave();
+      });
+      row.addEventListener('click', () => jumpToFrame(f));
+      row.addEventListener('mouseenter', () => highlightBbox(i, true));
+      row.addEventListener('mouseleave', () => highlightBbox(i, false));
+      body.appendChild(row);
+    });
+    tree.appendChild(det);
   });
 }
 
@@ -1124,26 +1182,58 @@ function svgPoint(evt) {
   };
 }
 svg.addEventListener('pointerdown', (e) => {
-  if (state.tool === 'roi') return;  // ROI usa click/mousemove en vez de drag
+  if (state.tool === 'roi') return;
   e.preventDefault();
   svg.setPointerCapture(e.pointerId);
   const p = svgPoint(e);
+  if (state.tool === 'select') {
+    // Hit-test: find topmost bbox at p (only on current frame)
+    const R = Math.max(state.upload.width, state.upload.height) * 0.03;
+    let hitIdx = null, hitCorner = null;
+    for (let i = state.bboxes.length - 1; i >= 0; i--) {
+      const b = state.bboxes[i];
+      if ((b.frame_index ?? 0) !== state.frameIndex) continue;
+      // Check corners first (priority for resize)
+      const corners = {tl:[b.x1,b.y1], tr:[b.x2,b.y1], bl:[b.x1,b.y2], br:[b.x2,b.y2]};
+      let nearCorner = null;
+      for (const [k, [cx, cy]] of Object.entries(corners)) {
+        if (Math.hypot(p.x - cx, p.y - cy) < R) { nearCorner = k; break; }
+      }
+      if (nearCorner) { hitIdx = i; hitCorner = nearCorner; break; }
+      // Inside?
+      if (p.x >= b.x1 && p.x <= b.x2 && p.y >= b.y1 && p.y <= b.y2) {
+        hitIdx = i; break;
+      }
+    }
+    if (hitIdx === null) {
+      state.selectedBboxIdx = null; state.bboxDrag = null;
+      renderOverlay(); scheduleSave();
+      return;
+    }
+    state.selectedBboxIdx = hitIdx;
+    pushHistory();
+    const b = state.bboxes[hitIdx];
+    if (hitCorner) {
+      state.bboxDrag = { mode: 'resize', corner: hitCorner, idx: hitIdx };
+    } else {
+      state.bboxDrag = { mode: 'move', idx: hitIdx,
+                         offset: { dx: p.x - b.x1, dy: p.y - b.y1 } };
+    }
+    renderOverlay();
+    return;
+  }
   if (state.tool === 'bbox') {
     if (state.activeClassId === null) return;
     state.drawing = { x1: p.x, y1: p.y, x2: p.x, y2: p.y, cls: state.activeClassId };
   } else if (state.tool === 'line') {
     if (state.line) {
-      // Línea existe: drag cerca de un extremo lo mueve; lejos no hace nada.
       const R = Math.max(state.upload.width, state.upload.height) * 0.04;
       const d1 = Math.hypot(p.x - state.line.x1, p.y - state.line.y1);
       const d2 = Math.hypot(p.x - state.line.x2, p.y - state.line.y2);
       if (d1 < R || d2 < R) {
         pushHistory();
         state.lineEndpointDrag = d1 <= d2 ? 'start' : 'end';
-      } else {
-        // No reemplaza. Para dibujar nueva, hay que apretar "Borrar línea".
-        return;
-      }
+      } else { return; }
     } else {
       state.lineDrawing = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
     }
@@ -1159,6 +1249,20 @@ svg.addEventListener('pointermove', (e) => {
     const p = svgPoint(e);
     if (state.lineEndpointDrag === 'start') { state.line.x1 = p.x; state.line.y1 = p.y; }
     else { state.line.x2 = p.x; state.line.y2 = p.y; }
+    renderOverlay();
+  } else if (state.bboxDrag) {
+    const p = svgPoint(e);
+    const b = state.bboxes[state.bboxDrag.idx];
+    if (state.bboxDrag.mode === 'move') {
+      const w = b.x2 - b.x1, h = b.y2 - b.y1;
+      b.x1 = p.x - state.bboxDrag.offset.dx;
+      b.y1 = p.y - state.bboxDrag.offset.dy;
+      b.x2 = b.x1 + w; b.y2 = b.y1 + h;
+    } else {
+      const c = state.bboxDrag.corner;
+      if (c.includes('l')) b.x1 = p.x; else b.x2 = p.x;
+      if (c.includes('t')) b.y1 = p.y; else b.y2 = p.y;
+    }
     renderOverlay();
   } else if (state.tool === 'roi' && state.roiDrawing) {
     const p = svgPoint(e); state.roiCursor = [p.x, p.y]; renderOverlay();
@@ -1187,10 +1291,34 @@ svg.addEventListener('pointerup', (e) => {
   } else if (state.lineEndpointDrag) {
     state.lineEndpointDrag = null;
     changed = true;
+  } else if (state.bboxDrag) {
+    // Normalize coords (resize could flip them)
+    const b = state.bboxes[state.bboxDrag.idx];
+    if (b.x2 < b.x1) [b.x1, b.x2] = [b.x2, b.x1];
+    if (b.y2 < b.y1) [b.y1, b.y2] = [b.y2, b.y1];
+    state.bboxDrag = null;
+    changed = true;
+    renderClasses();
   }
   renderOverlay();
   updateRoiButtons();
   if (changed) scheduleSave();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (state.tool !== 'select' || state.selectedBboxIdx === null) return;
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
+  if (e.key === 'Escape') {
+    state.selectedBboxIdx = null; state.bboxDrag = null;
+    renderOverlay();
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    pushHistory();
+    state.bboxes.splice(state.selectedBboxIdx, 1);
+    state.selectedBboxIdx = null;
+    renderOverlay(); renderClasses(); scheduleSave();
+  }
 });
 
 svg.addEventListener('click', (e) => {
@@ -1271,15 +1399,25 @@ function renderOverlay() {
   const parts = [];
   // bboxes (sólo del frame actual)
   const bboxPos = $('bbox-label-position').value;
+  const handleSize = Math.max(6, Math.min(state.upload.width, state.upload.height) * 0.015);
   state.bboxes.forEach((b, i) => {
     const bFrame = b.frame_index ?? 0;
     if (bFrame !== state.frameIndex) return;
     const col = classColor(b.cls);
     const [lx, ly, anchor] = bboxLabelPos(b, bboxPos);
+    const isSelected = state.tool === 'select' && state.selectedBboxIdx === i;
+    const rectClass = isSelected ? 'movable selected' : 'movable';
     parts.push(`<g data-i="${i}">
-      <rect x="${b.x1}" y="${b.y1}" width="${b.x2-b.x1}" height="${b.y2-b.y1}" fill="${col}" stroke="${col}" />
+      <rect class="${rectClass}" x="${b.x1}" y="${b.y1}" width="${b.x2-b.x1}" height="${b.y2-b.y1}" fill="${col}" fill-opacity="0.12" stroke="${col}" />
       <text x="${lx}" y="${ly}" text-anchor="${anchor}" fill="${col}">#${i+1} ${className(b.cls)}</text>
     </g>`);
+    if (isSelected) {
+      // Resize handles at corners
+      const corners = [['tl', b.x1, b.y1], ['tr', b.x2, b.y1], ['bl', b.x1, b.y2], ['br', b.x2, b.y2]];
+      corners.forEach(([k, x, y]) => {
+        parts.push(`<rect class="handle ${k}" x="${x - handleSize/2}" y="${y - handleSize/2}" width="${handleSize}" height="${handleSize}" fill="${col}" stroke="#000" stroke-width="1"/>`);
+      });
+    }
   });
   // drawing bbox
   if (state.drawing) {
