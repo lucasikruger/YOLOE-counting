@@ -47,6 +47,14 @@ def _safe_dict_float(raw: str) -> dict[str, float]:
         return {}
 
 
+def _safe_list(raw: str) -> list:
+    try:
+        v = json.loads(raw or "[]")
+        return v if isinstance(v, list) else []
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return []
+
+
 def _meta_path(upload_id: str) -> Path:
     return UPLOAD_DIR / f"{upload_id}.json"
 
@@ -113,6 +121,7 @@ class Job:
     rates: dict[str, float] = field(default_factory=dict)
     rate_unit: str = "min"
     rate_window_seconds: float = 0.0
+    roi_occupancy: dict[str, dict] = field(default_factory=dict)
     error: str | None = None
     output_path: str | None = None
     original_filename: str = ""
@@ -336,6 +345,14 @@ async def create_job(
     initial_counts_in: str = Form("{}"),
     initial_counts_out: str = Form("{}"),
     initial_rates: str = Form("{}"),
+    rois: str = Form("[]"),
+    show_roi_panel: bool = Form(True),
+    roi_panel_corner: str = Form("BL"),
+    roi_panel_stack: str = Form("h"),
+    roi_panel_free_color: str = Form("#34d399"),
+    roi_panel_occupied_color: str = Form("#f87171"),
+    roi_panel_free_text: str = Form("libre"),
+    roi_panel_occupied_text: str = Form("ocupado"),
     show_id: bool = Form(True),
     show_conf: bool = Form(True),
     line_label: str = Form(""),
@@ -409,6 +426,14 @@ async def create_job(
         initial_counts_in=_safe_dict_int(initial_counts_in),
         initial_counts_out=_safe_dict_int(initial_counts_out),
         initial_rates=_safe_dict_float(initial_rates),
+        rois=_safe_list(rois),
+        show_roi_panel=show_roi_panel,
+        roi_panel_corner=roi_panel_corner if roi_panel_corner in ("TL","TR","BL","BR") else "BL",
+        roi_panel_stack=roi_panel_stack if roi_panel_stack in ("h", "v") else "h",
+        roi_panel_free_color=roi_panel_free_color,
+        roi_panel_occupied_color=roi_panel_occupied_color,
+        roi_panel_free_text=roi_panel_free_text,
+        roi_panel_occupied_text=roi_panel_occupied_text,
         show_id=show_id, show_conf=show_conf,
         line_label=line_label, roi_label=roi_label,
         line_color=line_color, roi_color=roi_color,
@@ -501,7 +526,8 @@ def _run_job(job_id: str, cfg: StreamConfig) -> None:
             j.frame_counter = n
             j.frames_processed = n
 
-    def on_counts(cin: dict, cout: dict, rates: dict | None = None, window: float = 0.0):
+    def on_counts(cin: dict, cout: dict, rates: dict | None = None,
+                  window: float = 0.0, roi_occupancy: dict | None = None):
         with LOCK:
             j = JOBS.get(job_id)
             if j is None:
@@ -511,6 +537,8 @@ def _run_job(job_id: str, cfg: StreamConfig) -> None:
             if rates is not None:
                 j.rates = rates
                 j.rate_window_seconds = window
+            if roi_occupancy is not None:
+                j.roi_occupancy = roi_occupancy
 
     try:
         result = run_stream(cfg, on_frame=on_frame, on_counts=on_counts)
@@ -523,6 +551,7 @@ def _run_job(job_id: str, cfg: StreamConfig) -> None:
             JOBS[job_id].counts_out = result.counts_out
             JOBS[job_id].rates = result.rates
             JOBS[job_id].rate_window_seconds = result.rate_window_seconds
+            JOBS[job_id].roi_occupancy = result.roi_occupancy
     except Exception as exc:  # noqa: BLE001
         with LOCK:
             JOBS[job_id].status = "error"

@@ -37,8 +37,18 @@ class StreamConfig:
     vid_stride: int = 1
     use_tracker: bool = True
     line: list[float] | None = None
-    # ROI: list of [x, y] vertices (polygon)
+    # Legacy single ROI (still used for the line/counting filter)
     roi_polygon: list[list[float]] | None = None
+    # Multi-ROI occupancy: list of {name, points, color, occupancy_threshold}
+    rois: list[dict] = field(default_factory=list)
+    # ROI occupancy panel
+    show_roi_panel: bool = True
+    roi_panel_corner: str = "BL"           # TL | TR | BL | BR
+    roi_panel_stack: str = "h"             # h | v
+    roi_panel_free_color: str = "#34d399"
+    roi_panel_occupied_color: str = "#f87171"
+    roi_panel_free_text: str = "libre"
+    roi_panel_occupied_text: str = "ocupado"
     # Tracker params (ByteTrack)
     track_activation_threshold: float = 0.25
     lost_track_buffer: int = 30
@@ -110,6 +120,7 @@ class DetectionResult:
     counts_out: dict[str, int]
     rates: dict[str, float] = field(default_factory=dict)
     rate_window_seconds: float = 0.0
+    roi_occupancy: dict[str, dict] = field(default_factory=dict)
 
 
 def _get_model(name: str) -> YOLOE:
@@ -197,6 +208,60 @@ def _hex_to_rgb(s: str, default: tuple[int, int, int]) -> tuple[int, int, int]:
         return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
     except ValueError:
         return default
+
+
+def _draw_roi_status_panel(img, rois: list[dict], occupancy: dict[str, dict], cfg) -> None:
+    if not rois:
+        return
+    free_rgb = _hex_to_rgb(cfg.roi_panel_free_color, (52, 211, 153))
+    occ_rgb = _hex_to_rgb(cfg.roi_panel_occupied_color, (248, 113, 113))
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    name_scale = 0.45
+    status_scale = 0.55
+    cell_w = 130
+    cell_h = 78
+    pad = 8
+    gap = 6
+    n = len(rois)
+    if cfg.roi_panel_stack == "v":
+        w = cell_w + 2 * pad
+        h = n * cell_h + (n - 1) * gap + 2 * pad
+    else:
+        w = n * cell_w + (n - 1) * gap + 2 * pad
+        h = cell_h + 2 * pad
+    H, W = img.shape[:2]
+    corner = cfg.roi_panel_corner
+    if corner == "TR": x0, y0 = W - w - 10, 10
+    elif corner == "BL": x0, y0 = 10, H - h - 10
+    elif corner == "BR": x0, y0 = W - w - 10, H - h - 10
+    else: x0, y0 = 10, 10
+    overlay = img.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + w, y0 + h), (12, 16, 22), -1)
+    cv2.addWeighted(overlay, 0.55, img, 0.45, 0, dst=img)
+    cv2.rectangle(img, (x0, y0), (x0 + w, y0 + h), (60, 80, 100), 1)
+    for i, r in enumerate(rois):
+        if cfg.roi_panel_stack == "v":
+            cx0 = x0 + pad
+            cy0 = y0 + pad + i * (cell_h + gap)
+        else:
+            cx0 = x0 + pad + i * (cell_w + gap)
+            cy0 = y0 + pad
+        occ = occupancy.get(r["name"], {}).get("occupied", False)
+        rgb = occ_rgb if occ else free_rgb
+        bgr = (rgb[2], rgb[1], rgb[0])
+        cv2.rectangle(img, (cx0, cy0), (cx0 + cell_w, cy0 + cell_h), bgr, -1)
+        cv2.rectangle(img, (cx0, cy0), (cx0 + cell_w, cy0 + cell_h), (0, 0, 0), 1)
+        # ROI name at top-left
+        name = r["name"][:20]
+        cv2.putText(img, name, (cx0 + 6, cy0 + 18), font, name_scale,
+                    (255, 255, 255), 1, cv2.LINE_AA)
+        # Status text centered
+        text = cfg.roi_panel_occupied_text if occ else cfg.roi_panel_free_text
+        (tw, th), _ = cv2.getTextSize(text, font, status_scale, 2)
+        tx = cx0 + (cell_w - tw) // 2
+        ty = cy0 + cell_h - 14
+        cv2.putText(img, text, (tx, ty), font, status_scale, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(img, text, (tx, ty), font, status_scale, (255, 255, 255), 2, cv2.LINE_AA)
 
 
 def _draw_legend(img, items: list[tuple[str, tuple[int, int, int]]], corner: str) -> None:
@@ -528,6 +593,7 @@ def run_stream(
             display_out_count=cfg.show_out and on_line,
         )
 
+    # Legacy single ROI (used as a detection filter for line counting).
     roi_zone = None
     roi_annotator = None
     if cfg.roi_polygon and len(cfg.roi_polygon) >= 3:
@@ -538,6 +604,33 @@ def run_stream(
             thickness=2, text_scale=0.5, text_thickness=1, text_padding=4,
             display_in_zone_count=False, opacity=0.10,
         )
+
+    # Multi-ROI occupancy (independent of the filter ROI above).
+    multi_rois: list[dict] = []
+    for r in cfg.rois:
+        pts = r.get("points") or []
+        if len(pts) < 3:
+            continue
+        try:
+            poly = np.array(pts, dtype=np.int32)
+        except Exception:  # noqa: BLE001
+            continue
+        rgb = _hex_to_rgb(r.get("color", ""), (96, 165, 250))
+        zone = sv.PolygonZone(polygon=poly, triggering_anchors=[sv.Position.CENTER])
+        annotator = sv.PolygonZoneAnnotator(
+            zone=zone, color=sv.Color(*rgb),
+            thickness=2, text_scale=0.5, text_thickness=1, text_padding=4,
+            display_in_zone_count=False, opacity=0.10,
+        )
+        multi_rois.append({
+            "name": str(r.get("name") or f"ROI {len(multi_rois) + 1}"),
+            "points": pts,
+            "color_rgb": rgb,
+            "threshold": int(r.get("occupancy_threshold", 1) or 1),
+            "zone": zone,
+            "annotator": annotator,
+        })
+    roi_occupancy: dict[str, dict] = {r["name"]: {"occupied": False, "count": 0} for r in multi_rois}
 
     counts_in: dict[str, int] = {n: int(cfg.initial_counts_in.get(n, 0)) for n in names}
     counts_out: dict[str, int] = {n: int(cfg.initial_counts_out.get(n, 0)) for n in names}
@@ -639,7 +732,7 @@ def run_stream(
                         scene = label_outline_ann.annotate(scene=scene, detections=detections, labels=labels)
                     scene = label_ann.annotate(scene=scene, detections=detections, labels=labels)
 
-            # ROI outline always visible (after detections so it overlays cleanly)
+            # Legacy single ROI overlay
             if roi_annotator is not None:
                 if cfg.outline_roi and cfg.roi_polygon:
                     pts = np.array(cfg.roi_polygon, dtype=np.int32).reshape(-1, 1, 2)
@@ -648,6 +741,25 @@ def run_stream(
                 if cfg.roi_label and cfg.roi_polygon:
                     pos = _roi_label_pos(cfg.roi_polygon, cfg.roi_label_position)
                     _draw_label(scene, cfg.roi_label, pos, roi_rgb)
+
+            # Multi-ROI occupancy: count detections inside each and annotate
+            for r in multi_rois:
+                if len(detections) > 0:
+                    inside = r["zone"].trigger(detections)
+                    cnt = int(np.asarray(inside).sum())
+                else:
+                    cnt = 0
+                occ = cnt >= r["threshold"]
+                roi_occupancy[r["name"]] = {"occupied": occ, "count": cnt}
+                if cfg.outline_roi:
+                    pts = np.array(r["points"], dtype=np.int32).reshape(-1, 1, 2)
+                    cv2.polylines(scene, [pts], True, (0, 0, 0), 4, lineType=cv2.LINE_AA)
+                scene = r["annotator"].annotate(scene=scene)
+                # Label = ROI name
+                if r["name"]:
+                    pts = np.array(r["points"], dtype=np.int32)
+                    cx, cy = int(pts[:, 0].mean()), int(pts[:, 1].mean())
+                    _draw_label(scene, r["name"], (cx, cy), r["color_rgb"])
 
             if line_zone is not None:
                 in_mask, out_mask = line_zone.trigger(detections)
@@ -691,7 +803,12 @@ def run_stream(
                 if on_counts is not None:
                     on_counts(dict(counts_in), dict(counts_out),
                               rates=dict(rates) if cfg.show_rate else None,
-                              window=current_window if cfg.show_rate else 0.0)
+                              window=current_window if cfg.show_rate else 0.0,
+                              roi_occupancy=dict(roi_occupancy))
+
+            # ROI status panel (libre / ocupado per ROI)
+            if cfg.show_roi_panel and multi_rois:
+                _draw_roi_status_panel(scene, multi_rois, roi_occupancy, cfg)
 
             # Counts overlay in corner (after line so it sits on top)
             if cfg.show_counts_overlay and (line_zone is not None or roi_zone is not None):
@@ -742,4 +859,5 @@ def run_stream(
         output_video=output_video, frames_processed=n,
         counts_in=counts_in, counts_out=counts_out,
         rates=dict(rates), rate_window_seconds=current_window,
+        roi_occupancy=dict(roi_occupancy),
     )
