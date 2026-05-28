@@ -53,6 +53,7 @@ class StreamConfig:
     rate_window_min_sec: float = 1.0
     rate_window_max_sec: float = 5.0
     rate_source: str = "both"     # "in" | "out" | "both"
+    show_rate_window: bool = True  # show "(vent. Xs)" next to the rate header
     # Label display options
     show_id: bool = True
     show_conf: bool = True
@@ -219,7 +220,8 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
                          show_in: bool = True, show_out: bool = True,
                          line_rgb: tuple[int, int, int] = (244, 114, 182),
                          rates: dict[str, float] | None = None,
-                         rate_unit: str = "min", rate_window: float = 0.0) -> None:
+                         rate_unit: str = "min", rate_window: float = 0.0,
+                         show_rate_window: bool = True) -> None:
     """Draw a semi-transparent box with per-class in/out counts in a corner."""
     if not names:
         return
@@ -278,8 +280,12 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
     # Rate sub-box BELOW the counts box (or above if corner is BL/BR)
     if rates is not None and names:
         unit_str = "/min" if rate_unit == "min" else "/seg"
-        header = f"{unit_str:<11} (vent. {rate_window:.1f}s)"
-        rlines = [header] + [f"{n[:11]:<11} {rates.get(n, 0.0):>6.1f}" for n in names]
+        col_header = f"clase {unit_str}"
+        if show_rate_window:
+            header = f"{'clase':<11} {col_header:>8} (vent. {rate_window:.1f}s)"
+        else:
+            header = f"{'clase':<11} {col_header:>8}"
+        rlines = [header] + [f"{n[:11]:<11} {rates.get(n, 0.0):>14.1f}" for n in names]
         rwidths = [cv2.getTextSize(l, font, scale, thick)[0][0] for l in rlines]
         rw = max(rwidths) + pad * 2
         rh = line_h * len(rlines) + pad
@@ -608,6 +614,7 @@ def run_stream(
                     line_rgb=line_rgb,
                     rates=rates if cfg.show_rate else None,
                     rate_unit=cfg.rate_unit, rate_window=current_window,
+                    show_rate_window=cfg.show_rate_window,
                 )
 
             # Legend overlay

@@ -430,6 +430,12 @@
             <option value="min" selected>por minuto</option>
             <option value="sec">por segundo</option>
           </select>
+          <div style="display:flex; align-items:center; gap:8px">
+            <input id="show-rate-window" type="checkbox" checked style="width:auto; margin:0" />
+            <label for="show-rate-window" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+              Mostrar ventana actual
+            </label>
+          </div>
           <select id="rate-source" style="width:auto" title="Qué cruces cuenta">
             <option value="both" selected>in + out</option>
             <option value="in">solo in</option>
@@ -630,6 +636,7 @@ function applySession(s) {
   if (r.source) $('rate-source').value = r.source;
   if (r.win_min != null) $('rate-min').value = r.win_min;
   if (r.win_max != null) $('rate-max').value = r.win_max;
+  if (r.show_window != null) $('show-rate-window').checked = !!r.show_window;
   // Update UI
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.mode === state.mode));
   $('mode-text').style.display = state.mode === 'text' ? 'block' : 'none';
@@ -684,6 +691,7 @@ function snapshotSession() {
       show: $('show-rate').checked, unit: $('rate-unit').value,
       source: $('rate-source').value,
       win_min: +$('rate-min').value, win_max: +$('rate-max').value,
+      show_window: $('show-rate-window').checked,
     },
   };
 }
@@ -1291,6 +1299,7 @@ function buildJobForm() {
   fd.append('rate_window_min_sec', $('rate-min').value);
   fd.append('rate_window_max_sec', $('rate-max').value);
   fd.append('rate_source', $('rate-source').value);
+  fd.append('show_rate_window', $('show-rate-window').checked ? 'true' : 'false');
 
   if (state.mode === 'text') {
     fd.append('prompts', $('prompts').value);
@@ -1411,13 +1420,15 @@ function renderCounts(job) {
   if (showRate && Object.keys(rates).length > 0) {
     const unit = ($('rate-unit').value === 'sec') ? 'por segundo' : 'por minuto';
     $('rate-unit-label').textContent = unit;
+    const showWin = $('show-rate-window').checked;
     const win = job.rate_window_seconds || 0;
-    $('rate-window-label').textContent = win > 0 ? `· ventana ${win.toFixed(1)}s` : '';
+    $('rate-window-label').textContent = (showWin && win > 0) ? `· ventana ${win.toFixed(1)}s` : '';
     $('rates-panel').style.display = 'block';
     const rgrid = $('rates-grid');
     rgrid.style.gridTemplateColumns = 'auto 1fr auto';
     const sw = `<div style="width:14px;height:14px;border-radius:3px;background:${lineColor};border:1px solid var(--border);align-self:center"></div>`;
-    let rhtml = `${sw}<div class="ch">Clase</div><div class="ch" style="text-align:right">tasa</div>`;
+    const rateColHeader = ($('rate-unit').value === 'sec') ? 'clase / seg' : 'clase / min';
+    let rhtml = `${sw}<div class="ch">Clase</div><div class="ch" style="text-align:right">${rateColHeader}</div>`;
     for (const n of names) {
       rhtml += `<div></div><div class="cn">${escapeHtml(n)}</div><div class="cv" style="color:var(--accent)">${(rates[n] ?? 0).toFixed(1)}</div>`;
     }
@@ -1464,7 +1475,7 @@ updateHint();
  'show-class-name', 'show-box', 'show-mask',
  'show-legend', 'legend-corner',
  't-act', 't-lost', 't-match', 't-min', 't-ghost', 't-ghost-age',
- 'show-rate', 'rate-unit', 'rate-source', 'rate-min', 'rate-max',
+ 'show-rate', 'rate-unit', 'rate-source', 'rate-min', 'rate-max', 'show-rate-window',
  'line-label', 'roi-label', 'line-color', 'roi-color',
  'in-label', 'out-label', 'show-in', 'show-out',
  'show-counts-overlay', 'counts-corner',
