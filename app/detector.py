@@ -152,11 +152,11 @@ def _draw_label(img, text: str, center: tuple[int, int], color_rgb: tuple[int, i
     cv2.putText(img, text, (x, y), font, scale, bgr, 1, cv2.LINE_AA)
 
 
-def _ghost_detections(tracker, class_map: dict[int, int], max_age: int):
-    """Build a Detections of Kalman-predicted positions for tracks that were
-    lost within the last `max_age` frames. The tracker keeps advancing each
-    lost track's position via its Kalman filter every frame, so tlbr reflects
-    where the object is *expected* to be even though no detection landed."""
+def _ghost_detections(tracker, class_map: dict[int, int], max_age: int, is_obb: bool = False):
+    """Kalman-predicted positions for tracks lost within `max_age` frames.
+    When the host model is OBB, also synthesises a degenerate axis-aligned
+    xyxyxyxy so the OrientedBoxAnnotator can render the ghost as a regular
+    rectangle (we don't have a rotation estimate for lost tracks)."""
     if not getattr(tracker, "lost_tracks", None):
         return None
     cur = getattr(tracker, "frame_id", None)
@@ -165,7 +165,6 @@ def _ghost_detections(tracker, class_map: dict[int, int], max_age: int):
         tid = getattr(lt, "external_track_id", None)
         if tid is None or int(tid) not in class_map:
             continue
-        # Skip tracks lost too long (predictions become unreliable)
         if cur is not None and getattr(lt, "frame_id", None) is not None:
             if cur - lt.frame_id > max_age:
                 continue
@@ -175,12 +174,21 @@ def _ghost_detections(tracker, class_map: dict[int, int], max_age: int):
         rows_id.append(int(tid))
     if not rows_xyxy:
         return None
-    return sv.Detections(
-        xyxy=np.asarray(rows_xyxy, dtype=np.float32),
+    xyxy = np.asarray(rows_xyxy, dtype=np.float32)
+    kwargs = dict(
+        xyxy=xyxy,
         confidence=np.asarray(rows_conf, dtype=np.float32),
         class_id=np.asarray(rows_cls, dtype=np.int64),
         tracker_id=np.asarray(rows_id, dtype=np.int64),
     )
+    if is_obb:
+        corners = np.zeros((len(xyxy), 4, 2), dtype=np.float32)
+        corners[:, 0, :] = xyxy[:, [0, 1]]
+        corners[:, 1, :] = xyxy[:, [2, 1]]
+        corners[:, 2, :] = xyxy[:, [2, 3]]
+        corners[:, 3, :] = xyxy[:, [0, 3]]
+        kwargs["data"] = {"xyxyxyxy": corners}
+    return sv.Detections(**kwargs)
 
 
 def _line_label_pos(line, position: str) -> tuple[int, int]:
@@ -576,8 +584,15 @@ def run_stream(
     else:
         palette = sv.ColorPalette.DEFAULT
 
-    box_outline_ann = sv.BoxAnnotator(thickness=cfg.bbox_thickness + 3, color=sv.Color.BLACK) if cfg.outline_bbox else None
-    box_ann = sv.BoxAnnotator(thickness=cfg.bbox_thickness, color=palette)
+    is_obb = cfg.model_type == "yolo-obb"
+    if is_obb:
+        box_outline_ann = sv.OrientedBoxAnnotator(
+            thickness=cfg.bbox_thickness + 3, color=sv.Color.BLACK,
+        ) if cfg.outline_bbox else None
+        box_ann = sv.OrientedBoxAnnotator(thickness=cfg.bbox_thickness, color=palette)
+    else:
+        box_outline_ann = sv.BoxAnnotator(thickness=cfg.bbox_thickness + 3, color=sv.Color.BLACK) if cfg.outline_bbox else None
+        box_ann = sv.BoxAnnotator(thickness=cfg.bbox_thickness, color=palette)
     try:
         bbox_pos = sv.Position[cfg.bbox_label_position]
     except KeyError:
@@ -729,7 +744,8 @@ def run_stream(
                 if mask_ann is not None and detections.mask is not None and len(detections) > 0:
                     scene = mask_ann.annotate(scene=scene, detections=detections)
                 if cfg.show_ghost_tracks:
-                    ghosts = _ghost_detections(tracker, tracker_class_map, cfg.ghost_max_age)
+                    ghosts = _ghost_detections(tracker, tracker_class_map,
+                                               cfg.ghost_max_age, is_obb=is_obb)
                     if ghosts is not None and len(ghosts) > 0:
                         if detections.mask is not None:
                             detections = sv.Detections(
