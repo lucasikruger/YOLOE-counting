@@ -54,6 +54,10 @@ class StreamConfig:
     roi_panel_occupied_text: str = "ocupado"
     roi_panel_cell_w: int = 130
     roi_panel_cell_h: int = 78
+    # When True, each occupancy zone's polygon and label use the free/occupied
+    # color (from the panel) instead of the zone's own color, switching live
+    # with the occupancy state.
+    zone_follow_status_color: bool = False
     # Occupancy stays "occupied" for at least N seconds after the last detection
     # — kills the flicker when a car/object briefly disappears.
     occupied_persistence_sec: float = 0.0
@@ -857,14 +861,26 @@ def run_stream(
                 if cfg.roi_label and cfg.roi_polygon:
                     pos = _roi_label_pos(cfg.roi_polygon, cfg.roi_label_position)
                     _draw_label(scene, cfg.roi_label, pos, roi_rgb, scale_mult=tsm_zones)
+            free_rgb_panel = _hex_to_rgb(cfg.roi_panel_free_color, (52, 211, 153))
+            occ_rgb_panel = _hex_to_rgb(cfg.roi_panel_occupied_color, (248, 113, 113))
             for r in multi_rois:
+                if cfg.zone_follow_status_color:
+                    zone_rgb = occ_rgb_panel if roi_occupancy[r["name"]]["occupied"] else free_rgb_panel
+                else:
+                    zone_rgb = r["color_rgb"]
+                zone_bgr = (zone_rgb[2], zone_rgb[1], zone_rgb[0])
+                pts_arr = np.array(r["points"], dtype=np.int32)
                 if cfg.outline_roi:
-                    pts = np.array(r["points"], dtype=np.int32).reshape(-1, 1, 2)
-                    cv2.polylines(scene, [pts], True, (0, 0, 0), 4, lineType=cv2.LINE_AA)
-                scene = r["annotator"].annotate(scene=scene)
+                    cv2.polylines(scene, [pts_arr.reshape(-1, 1, 2)], True, (0, 0, 0), 4, lineType=cv2.LINE_AA)
+                # Translucent fill + colored outline (replaces the PolygonZoneAnnotator
+                # call so the color can change per frame with the status).
+                overlay = scene.copy()
+                cv2.fillPoly(overlay, [pts_arr], zone_bgr)
+                cv2.addWeighted(overlay, 0.10, scene, 0.90, 0, dst=scene)
+                cv2.polylines(scene, [pts_arr.reshape(-1, 1, 2)], True, zone_bgr, 2, lineType=cv2.LINE_AA)
                 if r["name"]:
                     pos = _roi_label_pos(r["points"], r.get("label_position", "center"))
-                    _draw_label(scene, r["name"], pos, r["color_rgb"], scale_mult=tsm_zones)
+                    _draw_label(scene, r["name"], pos, zone_rgb, scale_mult=tsm_zones)
             if line_zone is not None:
                 if cfg.outline_line:
                     cv2.line(scene,

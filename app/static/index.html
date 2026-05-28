@@ -562,6 +562,13 @@
           <input id="roi-panel-occupied-color" type="color" value="#f87171" style="width:38px; height:30px; padding:0; border:1px solid var(--border); border-radius:6px; background:transparent" />
           <input id="roi-panel-occupied-text" type="text" value="ocupado" style="width:120px" />
         </div>
+        <div style="margin-top:10px; display:flex; align-items:center; gap:8px">
+          <input id="zone-follow-status" type="checkbox" style="width:auto; margin:0" />
+          <label for="zone-follow-status" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Zonas y labels usan colores libre/ocupado
+          </label>
+        </div>
+
         <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
           <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; min-width:55px">Tamaño</span>
           <label style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">Ancho</label>
@@ -727,6 +734,7 @@ const state = {
   modelType: 'yoloe',                    // yoloe | yolo | yolo-obb
   yoloClassIds: [],                      // selected class IDs for yolo/yolo-obb
   yoloClassNames: {},                    // cache of model.names {id: name}
+  yoloClassColors: {},                   // {id: '#hex'} — per-class color in yolo mode
   mode: 'text',
   tool: 'line',  // 'bbox' | 'line'
   upload: null,
@@ -824,6 +832,7 @@ function applySession(s) {
   state.mode = s.mode || 'text';
   state.modelType = (s.model_type && s.model_type in MODEL_LISTS) ? s.model_type : 'yoloe';
   state.yoloClassIds = Array.isArray(s.yolo_class_ids) ? [...s.yolo_class_ids] : [];
+  state.yoloClassColors = (s.yolo_class_colors && typeof s.yolo_class_colors === 'object') ? {...s.yolo_class_colors} : {};
   $('model-type').value = state.modelType;
   setModelType(state.modelType);
   state.classes = (s.classes && s.classes.length) ? s.classes.map(c => ({...c})) : [];
@@ -859,6 +868,7 @@ function applySession(s) {
   if (rp.occupied_text) $('roi-panel-occupied-text').value = rp.occupied_text;
   if (rp.cell_w != null) $('roi-panel-cell-w').value = rp.cell_w;
   if (rp.cell_h != null) $('roi-panel-cell-h').value = rp.cell_h;
+  if (rp.zone_follow_status != null) $('zone-follow-status').checked = !!rp.zone_follow_status;
   if (rp.occupied_persistence_sec != null) $('occupied-persistence').value = rp.occupied_persistence_sec;
   if (rp.text_scale_mult != null) {
     $('text-scale-mult').value = rp.text_scale_mult;
@@ -952,6 +962,7 @@ function snapshotSession() {
     mode: state.mode,
     model_type: state.modelType,
     yolo_class_ids: state.yoloClassIds,
+    yolo_class_colors: state.yoloClassColors,
     classes: state.classes,
     active_class_id: state.activeClassId,
     bboxes: state.bboxes,
@@ -1022,6 +1033,7 @@ function snapshotSession() {
       occupied_text: $('roi-panel-occupied-text').value,
       cell_w: +$('roi-panel-cell-w').value,
       cell_h: +$('roi-panel-cell-h').value,
+      zone_follow_status: $('zone-follow-status').checked,
       occupied_persistence_sec: +$('occupied-persistence').value,
       text_scale_mult: +$('text-scale-mult').value,
       text_mult_det: +$('text-mult-det').value,
@@ -1150,6 +1162,10 @@ async function fetchYoloClasses(modelName) {
   }
 }
 
+function yoloClassColor(id) {
+  return state.yoloClassColors[id] || PALETTE[id % PALETTE.length];
+}
+
 function renderYoloClassList() {
   const list = $('yolo-class-list');
   const filter = ($('yolo-class-filter').value || '').toLowerCase().trim();
@@ -1163,6 +1179,7 @@ function renderYoloClassList() {
     const checked = state.yoloClassIds.includes(c.id) ? 'checked' : '';
     return `<label style="display:flex; align-items:center; gap:6px; padding:2px 4px; cursor:pointer; font-size:13px">
       <input type="checkbox" data-id="${c.id}" ${checked} style="width:auto; margin:0" />
+      <input type="color" class="swatch" data-color-for="${c.id}" value="${yoloClassColor(c.id)}" title="Color de esta clase" />
       <span style="font-family:ui-monospace, monospace; color:var(--muted); font-size:11px">${c.id}</span>
       <span>${escapeHtml(c.name)}</span>
     </label>`;
@@ -1176,6 +1193,14 @@ function renderYoloClassList() {
         state.yoloClassIds = state.yoloClassIds.filter(x => x !== id);
       }
       $('yolo-selected-count').textContent = state.yoloClassIds.length;
+      scheduleSave();
+    });
+  });
+  list.querySelectorAll('input[type=color]').forEach(cp => {
+    cp.addEventListener('click', (e) => e.stopPropagation());
+    cp.addEventListener('input', (e) => {
+      const id = +e.target.dataset.colorFor;
+      state.yoloClassColors[id] = e.target.value;
       scheduleSave();
     });
   });
@@ -1994,6 +2019,7 @@ function buildJobForm() {
   fd.append('roi_panel_occupied_text', $('roi-panel-occupied-text').value);
   fd.append('roi_panel_cell_w', $('roi-panel-cell-w').value);
   fd.append('roi_panel_cell_h', $('roi-panel-cell-h').value);
+  fd.append('zone_follow_status_color', $('zone-follow-status').checked ? 'true' : 'false');
   fd.append('occupied_persistence_sec', $('occupied-persistence').value);
   fd.append('text_scale_mult', $('text-scale-mult').value);
   fd.append('text_mult_det', $('text-mult-det').value);
@@ -2019,10 +2045,12 @@ function buildJobForm() {
   fd.append('show_legend', $('show-legend').checked ? 'true' : 'false');
   fd.append('legend_corner', $('legend-corner').value);
   // class_colors aligned with unique cls ids (sequential 0..N-1 after remap)
-  if (state.mode === 'visual') {
+  if (state.modelType !== 'yoloe') {
+    // YOLO / YOLO-OBB: colors aligned with the user-selected class IDs
+    fd.append('class_colors', state.yoloClassIds.map(id => yoloClassColor(id)).join(','));
+  } else if (state.mode === 'visual') {
     const usedIds = [...new Set(state.bboxes.map(b => b.cls))].sort((a,b)=>a-b);
     fd.append('class_colors', usedIds.map(cid => classColor(cid)).join(','));
-    // Per-bbox frame index for multi-frame visual prompts
     fd.append('bbox_frames', JSON.stringify(state.bboxes.map(b => b.frame_index ?? 0)));
   } else {
     fd.append('class_colors', state.classes.map(c => c.color).join(','));
@@ -2284,7 +2312,7 @@ updateHint();
  'roi-panel-show', 'roi-panel-stack', 'roi-panel-corner',
  'roi-panel-free-color', 'roi-panel-occupied-color',
  'roi-panel-free-text', 'roi-panel-occupied-text',
- 'roi-panel-cell-w', 'roi-panel-cell-h', 'occupied-persistence',
+ 'roi-panel-cell-w', 'roi-panel-cell-h', 'zone-follow-status', 'occupied-persistence',
  'text-scale-mult', 'text-mult-det', 'text-mult-zones', 'text-mult-panels',
  'in-label', 'out-label', 'show-in', 'show-out',
  'show-counts-overlay', 'counts-corner',
