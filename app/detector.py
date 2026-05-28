@@ -43,7 +43,7 @@ class StreamConfig:
     track_activation_threshold: float = 0.25
     lost_track_buffer: int = 30
     minimum_matching_threshold: float = 0.8
-    minimum_consecutive_frames: int = 1
+    minimum_consecutive_frames: int = 2
     # Ghost boxes: render last predicted position for tracks that lost detection
     show_ghost_tracks: bool = True
     ghost_max_age: int = 10

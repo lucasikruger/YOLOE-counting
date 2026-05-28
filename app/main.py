@@ -314,7 +314,7 @@ async def create_job(
     track_activation_threshold: float = Form(0.25),
     lost_track_buffer: int = Form(30),
     minimum_matching_threshold: float = Form(0.8),
-    minimum_consecutive_frames: int = Form(1),
+    minimum_consecutive_frames: int = Form(2),
     show_ghost_tracks: bool = Form(True),
     ghost_max_age: int = Form(10),
     smooth_bbox: bool = Form(True),
