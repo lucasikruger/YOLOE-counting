@@ -54,6 +54,13 @@ class StreamConfig:
     rate_window_max_sec: float = 5.0
     rate_source: str = "both"     # "in" | "out" | "both"
     show_rate_window: bool = True  # show "(vent. Xs)" next to the rate header
+    # Stroke / center-dot styling
+    outline_strokes: bool = True
+    line_thickness: int = 2
+    bbox_thickness: int = 2
+    show_bbox_center: bool = False
+    bbox_center_color: str = "#ffffff"
+    bbox_center_size: int = 4
     # Label display options
     show_id: bool = True
     show_conf: bool = True
@@ -221,7 +228,8 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
                          line_rgb: tuple[int, int, int] = (244, 114, 182),
                          rates: dict[str, float] | None = None,
                          rate_unit: str = "min", rate_window: float = 0.0,
-                         show_rate_window: bool = True) -> None:
+                         show_rate_window: bool = True,
+                         class_colors: list[tuple[int, int, int]] | None = None) -> None:
     """Draw a semi-transparent box with per-class in/out counts in a corner."""
     if not names:
         return
@@ -232,18 +240,20 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
     thick = 1
     line_h = 22
     pad = 8
-    in_txt = (in_label or "in")[:6]
-    out_txt = (out_label or "out")[:6]
+    NAME_W = 11
+    VAL_W = 6
+    in_txt = (in_label or "in")[:VAL_W]
+    out_txt = (out_label or "out")[:VAL_W]
     cols = []
     if show_in: cols.append(("in", in_txt))
     if show_out: cols.append(("out", out_txt))
-    header_parts = ["class".ljust(11)] + [c[1].rjust(6) for c in cols]
+    header_parts = ["class".ljust(NAME_W)] + [c[1].rjust(VAL_W) for c in cols]
     lines = [" ".join(header_parts)]
     for n in names:
-        row_parts = [n[:11].ljust(11)]
+        row_parts = [n[:NAME_W].ljust(NAME_W)]
         for kind, _ in cols:
             v = cin.get(n, 0) if kind == "in" else cout.get(n, 0)
-            row_parts.append(str(v).rjust(6))
+            row_parts.append(str(v).rjust(VAL_W))
         lines.append(" ".join(row_parts))
     swatch_w = 14
     swatch_gap = 6
@@ -271,41 +281,58 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
     sw_y = y0 + pad + 4
     cv2.rectangle(img, (sw_x, sw_y), (sw_x + swatch_w, sw_y + swatch_w), bgr_line, -1)
     cv2.rectangle(img, (sw_x, sw_y), (sw_x + swatch_w, sw_y + swatch_w), (230, 232, 235), 1)
-    # Text lines, shifted right to leave room for swatch column
+    # Text lines, shifted right to leave room for swatch column.
+    # Per-class rows get tinted with the class color (header stays neutral).
     text_x = x0 + pad + swatch_w + swatch_gap
     for i, line in enumerate(lines):
         y = y0 + pad + line_h * (i + 1) - 6
-        cv2.putText(img, line, (text_x, y), font, scale, (230, 232, 235), thick, cv2.LINE_AA)
+        if i == 0 or class_colors is None or (i - 1) >= len(class_colors):
+            color = (230, 232, 235)
+        else:
+            r, g, b = class_colors[i - 1]
+            color = (b, g, r)
+        cv2.putText(img, line, (text_x, y), font, scale, color, thick, cv2.LINE_AA)
 
     # Rate sub-box BELOW the counts box (or above if corner is BL/BR)
     if rates is not None and names:
         unit_str = "/min" if rate_unit == "min" else "/seg"
+        RNAME_W = 11
+        RVAL_W = 14
+        # Header text centered over the value column
         col_header = f"clase {unit_str}"
+        header_val = col_header.center(RVAL_W)
+        header_main = f"{'clase':<{RNAME_W}} {header_val}"
         if show_rate_window:
-            header = f"{'clase':<11} {col_header:>8} (vent. {rate_window:.1f}s)"
+            header = f"{header_main} (vent. {rate_window:.1f}s)"
         else:
-            header = f"{'clase':<11} {col_header:>8}"
-        rlines = [header] + [f"{n[:11]:<11} {rates.get(n, 0.0):>14.1f}" for n in names]
+            header = header_main
+        # Values: format then center in same column width
+        rlines = [header] + [
+            f"{n[:RNAME_W]:<{RNAME_W}} {f'{rates.get(n, 0.0):.1f}'.center(RVAL_W)}" for n in names
+        ]
         rwidths = [cv2.getTextSize(l, font, scale, thick)[0][0] for l in rlines]
         rw = max(rwidths) + pad * 2
         rh = line_h * len(rlines) + pad
-        # Position relative to the counts box
         if corner in ("TL", "BL"):
             rx0 = x0
         else:
             rx0 = x0 + w - rw
         if corner in ("TL", "TR"):
             ry0 = y0 + h + 6
-        else:  # BL, BR — place above so it doesn't run off the bottom
+        else:
             ry0 = y0 - rh - 6
-        # Background
         roverlay = img.copy()
         cv2.rectangle(roverlay, (rx0, ry0), (rx0 + rw, ry0 + rh), (12, 16, 22), -1)
         cv2.addWeighted(roverlay, 0.65, img, 0.35, 0, dst=img)
         cv2.rectangle(img, (rx0, ry0), (rx0 + rw, ry0 + rh), (60, 80, 100), 1)
         for i, line in enumerate(rlines):
             y = ry0 + pad + line_h * (i + 1) - 6
-            cv2.putText(img, line, (rx0 + pad, y), font, scale, (230, 232, 235), thick, cv2.LINE_AA)
+            if i == 0 or class_colors is None or (i - 1) >= len(class_colors):
+                color = (230, 232, 235)
+            else:
+                r, g, b = class_colors[i - 1]
+                color = (b, g, r)
+            cv2.putText(img, line, (rx0 + pad, y), font, scale, color, thick, cv2.LINE_AA)
 
 
 def extract_frame(video_path: Path, frame_index: int) -> np.ndarray:
@@ -453,7 +480,8 @@ def run_stream(
     else:
         palette = sv.ColorPalette.DEFAULT
 
-    box_ann = sv.BoxAnnotator(thickness=2, color=palette)
+    box_outline_ann = sv.BoxAnnotator(thickness=cfg.bbox_thickness + 3, color=sv.Color.BLACK) if cfg.outline_strokes else None
+    box_ann = sv.BoxAnnotator(thickness=cfg.bbox_thickness, color=palette)
     try:
         bbox_pos = sv.Position[cfg.bbox_label_position]
     except KeyError:
@@ -461,6 +489,7 @@ def run_stream(
     label_ann = sv.LabelAnnotator(text_scale=0.5, text_padding=3, text_thickness=1,
                                   text_position=bbox_pos, color=palette)
     mask_ann = sv.MaskAnnotator(color=palette, opacity=0.45) if cfg.show_mask else None
+    bbox_center_rgb = _hex_to_rgb(cfg.bbox_center_color, (255, 255, 255))
 
     line_rgb = _hex_to_rgb(cfg.line_color, (244, 114, 182))
     roi_rgb = _hex_to_rgb(cfg.roi_color, (96, 165, 250))
@@ -476,7 +505,7 @@ def run_stream(
         # If counts overlay is on, suppress on-line text — counts go in the corner box.
         on_line = not cfg.show_counts_overlay
         line_annotator = sv.LineZoneAnnotator(
-            thickness=2, text_thickness=1, text_scale=0.6, text_padding=4,
+            thickness=cfg.line_thickness, text_thickness=1, text_scale=0.6, text_padding=4,
             color=sv.Color(*line_rgb),
             custom_in_text=cfg.in_label or "in",
             custom_out_text=cfg.out_label or "out",
@@ -561,7 +590,18 @@ def run_stream(
                         parts.append(f"{float(detections.confidence[i]):.2f}")
                     labels.append(" ".join(parts))
                 if cfg.show_box:
+                    if box_outline_ann is not None:
+                        scene = box_outline_ann.annotate(scene=scene, detections=detections)
                     scene = box_ann.annotate(scene=scene, detections=detections)
+                if cfg.show_bbox_center:
+                    for i in range(len(detections)):
+                        x1b, y1b, x2b, y2b = detections.xyxy[i].astype(int)
+                        cx, cy = (x1b + x2b) // 2, (y1b + y2b) // 2
+                        if cfg.outline_strokes:
+                            cv2.circle(scene, (cx, cy), cfg.bbox_center_size + 2, (0, 0, 0), -1)
+                        cv2.circle(scene, (cx, cy),
+                                   max(1, cfg.bbox_center_size),
+                                   (bbox_center_rgb[2], bbox_center_rgb[1], bbox_center_rgb[0]), -1)
                 if any(l for l in labels):
                     scene = label_ann.annotate(scene=scene, detections=detections, labels=labels)
 
@@ -596,6 +636,13 @@ def run_stream(
                     while dq and dq[0] < cutoff:
                         dq.popleft()
                     rates[cname] = (len(dq) / current_window) * factor if current_window > 0 else 0.0
+                # Outline pass: draw a thicker black line first so the colored
+                # line on top has a dark border for visibility on any background.
+                if cfg.outline_strokes:
+                    cv2.line(scene,
+                             (int(cfg.line[0]), int(cfg.line[1])),
+                             (int(cfg.line[2]), int(cfg.line[3])),
+                             (0, 0, 0), cfg.line_thickness + 3, lineType=cv2.LINE_AA)
                 scene = line_annotator.annotate(frame=scene, line_counter=line_zone)
                 if cfg.line_label:
                     pos = _line_label_pos(cfg.line, cfg.line_label_position)
@@ -607,6 +654,11 @@ def run_stream(
 
             # Counts overlay in corner (after line so it sits on top)
             if cfg.show_counts_overlay and (line_zone is not None or roi_zone is not None):
+                # Per-class colors for tinted rows in the overlay
+                cls_rgb_list = [
+                    _hex_to_rgb(cfg.class_colors[i] if i < len(cfg.class_colors) else "", (230, 232, 235))
+                    for i in range(len(names))
+                ] if cfg.class_colors else None
                 _draw_counts_overlay(
                     scene, names, counts_in, counts_out, cfg.counts_corner,
                     in_label=cfg.in_label, out_label=cfg.out_label,
@@ -615,6 +667,7 @@ def run_stream(
                     rates=rates if cfg.show_rate else None,
                     rate_unit=cfg.rate_unit, rate_window=current_window,
                     show_rate_window=cfg.show_rate_window,
+                    class_colors=cls_rgb_list,
                 )
 
             # Legend overlay

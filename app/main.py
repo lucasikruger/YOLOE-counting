@@ -85,6 +85,7 @@ class Job:
     id: str
     mode: Mode = "text"
     class_names: list[str] = field(default_factory=list)
+    class_colors: list[str] = field(default_factory=list)
     model: str = "yoloe-11s-seg.pt"
     use_tracker: bool = True
     has_line: bool = False
@@ -306,6 +307,12 @@ async def create_job(
     rate_window_max_sec: float = Form(5.0),
     rate_source: str = Form("both"),
     show_rate_window: bool = Form(True),
+    outline_strokes: bool = Form(True),
+    line_thickness: int = Form(2),
+    bbox_thickness: int = Form(2),
+    show_bbox_center: bool = Form(False),
+    bbox_center_color: str = Form("#ffffff"),
+    bbox_center_size: int = Form(4),
     show_id: bool = Form(True),
     show_conf: bool = Form(True),
     line_label: str = Form(""),
@@ -370,6 +377,11 @@ async def create_job(
         rate_window_max_sec=rate_window_max_sec,
         rate_source=rate_source if rate_source in ("in", "out", "both") else "both",
         show_rate_window=show_rate_window,
+        outline_strokes=outline_strokes,
+        line_thickness=max(1, line_thickness), bbox_thickness=max(1, bbox_thickness),
+        show_bbox_center=show_bbox_center,
+        bbox_center_color=bbox_center_color,
+        bbox_center_size=max(1, bbox_center_size),
         show_id=show_id, show_conf=show_conf,
         line_label=line_label, roi_label=roi_label,
         line_color=line_color, roi_color=roi_color,
@@ -430,6 +442,7 @@ async def create_job(
         raise HTTPException(400, "mode must be 'text' or 'visual'")
 
     job = Job(id=job_id, mode=mode, class_names=full_names, model=model,
+              class_colors=cfg.class_colors[:len(full_names)],
               use_tracker=cfg.use_tracker, has_line=cfg.line is not None,
               has_roi=cfg.roi_polygon is not None,
               original_filename=upload.filename,

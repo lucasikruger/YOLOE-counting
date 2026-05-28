@@ -302,6 +302,36 @@
         </label>
       </div>
 
+      <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border); display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+        <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">Estilo</span>
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="outline-strokes" type="checkbox" checked style="width:auto; margin:0" />
+          <label for="outline-strokes" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">
+            Borde negro
+          </label>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px">
+          <label for="line-thickness" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">Línea (px)</label>
+          <input id="line-thickness" type="number" min="1" max="20" step="1" value="2" style="width:70px" />
+        </div>
+        <div style="display:flex; align-items:center; gap:8px">
+          <label for="bbox-thickness" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">Bbox (px)</label>
+          <input id="bbox-thickness" type="number" min="1" max="20" step="1" value="2" style="width:70px" />
+        </div>
+      </div>
+      <div style="margin-top:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap">
+        <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">Centro bbox</span>
+        <div style="display:flex; align-items:center; gap:8px">
+          <input id="show-bbox-center" type="checkbox" style="width:auto; margin:0" />
+          <label for="show-bbox-center" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px; cursor:pointer">Mostrar</label>
+        </div>
+        <input id="bbox-center-color" type="color" value="#ffffff" style="width:38px; height:30px; padding:0; border:1px solid var(--border); border-radius:6px; background:transparent" />
+        <div style="display:flex; align-items:center; gap:8px">
+          <label for="bbox-center-size" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:14px">Radio (px)</label>
+          <input id="bbox-center-size" type="number" min="1" max="40" step="1" value="4" style="width:70px" />
+        </div>
+      </div>
+
       <div style="margin-top:10px; display:flex; gap:20px; flex-wrap:wrap; align-items:center">
         <div style="display:flex; align-items:center; gap:8px">
           <input id="show-id" type="checkbox" checked style="width:auto; margin:0" />
@@ -637,6 +667,13 @@ function applySession(s) {
   if (r.win_min != null) $('rate-min').value = r.win_min;
   if (r.win_max != null) $('rate-max').value = r.win_max;
   if (r.show_window != null) $('show-rate-window').checked = !!r.show_window;
+  const sp = s.style_params || {};
+  if (sp.outline != null) $('outline-strokes').checked = !!sp.outline;
+  if (sp.line_thickness != null) $('line-thickness').value = sp.line_thickness;
+  if (sp.bbox_thickness != null) $('bbox-thickness').value = sp.bbox_thickness;
+  if (sp.show_center != null) $('show-bbox-center').checked = !!sp.show_center;
+  if (sp.center_color) $('bbox-center-color').value = sp.center_color;
+  if (sp.center_size != null) $('bbox-center-size').value = sp.center_size;
   // Update UI
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.mode === state.mode));
   $('mode-text').style.display = state.mode === 'text' ? 'block' : 'none';
@@ -692,6 +729,14 @@ function snapshotSession() {
       source: $('rate-source').value,
       win_min: +$('rate-min').value, win_max: +$('rate-max').value,
       show_window: $('show-rate-window').checked,
+    },
+    style_params: {
+      outline: $('outline-strokes').checked,
+      line_thickness: +$('line-thickness').value,
+      bbox_thickness: +$('bbox-thickness').value,
+      show_center: $('show-bbox-center').checked,
+      center_color: $('bbox-center-color').value,
+      center_size: +$('bbox-center-size').value,
     },
   };
 }
@@ -1300,6 +1345,12 @@ function buildJobForm() {
   fd.append('rate_window_max_sec', $('rate-max').value);
   fd.append('rate_source', $('rate-source').value);
   fd.append('show_rate_window', $('show-rate-window').checked ? 'true' : 'false');
+  fd.append('outline_strokes', $('outline-strokes').checked ? 'true' : 'false');
+  fd.append('line_thickness', $('line-thickness').value);
+  fd.append('bbox_thickness', $('bbox-thickness').value);
+  fd.append('show_bbox_center', $('show-bbox-center').checked ? 'true' : 'false');
+  fd.append('bbox_center_color', $('bbox-center-color').value);
+  fd.append('bbox_center_size', $('bbox-center-size').value);
 
   if (state.mode === 'text') {
     fd.append('prompts', $('prompts').value);
@@ -1405,11 +1456,13 @@ function renderCounts(job) {
     let html = `${sw}<div class="ch">Clase</div>`;
     if (showIn) html += `<div class="ch in" style="text-align:right">${escapeHtml(inLbl)}</div>`;
     if (showOut) html += `<div class="ch out" style="text-align:right">${escapeHtml(outLbl)}</div>`;
-    for (const n of names) {
-      html += `<div></div><div class="cn">${escapeHtml(n)}</div>`;
-      if (showIn) html += `<div class="cv in">${cin[n] ?? 0}</div>`;
-      if (showOut) html += `<div class="cv out">${cout[n] ?? 0}</div>`;
-    }
+    const classColors = job.class_colors || [];
+    names.forEach((n, i) => {
+      const col = classColors[i] || 'var(--text)';
+      html += `<div></div><div class="cn" style="color:${col}">${escapeHtml(n)}</div>`;
+      if (showIn) html += `<div class="cv" style="color:${col}">${cin[n] ?? 0}</div>`;
+      if (showOut) html += `<div class="cv" style="color:${col}">${cout[n] ?? 0}</div>`;
+    });
     grid.innerHTML = html;
   } else {
     $('counts').style.display = 'none';
@@ -1428,10 +1481,12 @@ function renderCounts(job) {
     rgrid.style.gridTemplateColumns = 'auto 1fr auto';
     const sw = `<div style="width:14px;height:14px;border-radius:3px;background:${lineColor};border:1px solid var(--border);align-self:center"></div>`;
     const rateColHeader = ($('rate-unit').value === 'sec') ? 'clase / seg' : 'clase / min';
-    let rhtml = `${sw}<div class="ch">Clase</div><div class="ch" style="text-align:right">${rateColHeader}</div>`;
-    for (const n of names) {
-      rhtml += `<div></div><div class="cn">${escapeHtml(n)}</div><div class="cv" style="color:var(--accent)">${(rates[n] ?? 0).toFixed(1)}</div>`;
-    }
+    let rhtml = `${sw}<div class="ch">Clase</div><div class="ch" style="text-align:center">${rateColHeader}</div>`;
+    const classColors2 = job.class_colors || [];
+    names.forEach((n, i) => {
+      const col = classColors2[i] || 'var(--accent)';
+      rhtml += `<div></div><div class="cn" style="color:${col}">${escapeHtml(n)}</div><div class="cv" style="color:${col}; text-align:center">${(rates[n] ?? 0).toFixed(1)}</div>`;
+    });
     rgrid.innerHTML = rhtml;
   } else {
     $('rates-panel').style.display = 'none';
@@ -1476,6 +1531,8 @@ updateHint();
  'show-legend', 'legend-corner',
  't-act', 't-lost', 't-match', 't-min', 't-ghost', 't-ghost-age',
  'show-rate', 'rate-unit', 'rate-source', 'rate-min', 'rate-max', 'show-rate-window',
+ 'outline-strokes', 'line-thickness', 'bbox-thickness',
+ 'show-bbox-center', 'bbox-center-color', 'bbox-center-size',
  'line-label', 'roi-label', 'line-color', 'roi-color',
  'in-label', 'out-label', 'show-in', 'show-out',
  'show-counts-overlay', 'counts-corner',
