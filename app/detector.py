@@ -44,6 +44,9 @@ class StreamConfig:
     lost_track_buffer: int = 30
     minimum_matching_threshold: float = 0.8
     minimum_consecutive_frames: int = 1
+    # Ghost boxes: render last predicted position for tracks that lost detection
+    show_ghost_tracks: bool = True
+    ghost_max_age: int = 10
     # Label display options
     show_id: bool = True
     show_conf: bool = True
@@ -100,6 +103,37 @@ def _draw_label(img, text: str, center: tuple[int, int], color_rgb: tuple[int, i
     bgr = (color_rgb[2], color_rgb[1], color_rgb[0])
     cv2.putText(img, text, (x, y), font, scale, (0, 0, 0), 4, cv2.LINE_AA)
     cv2.putText(img, text, (x, y), font, scale, bgr, 1, cv2.LINE_AA)
+
+
+def _ghost_detections(tracker, class_map: dict[int, int], max_age: int):
+    """Build a Detections of Kalman-predicted positions for tracks that were
+    lost within the last `max_age` frames. The tracker keeps advancing each
+    lost track's position via its Kalman filter every frame, so tlbr reflects
+    where the object is *expected* to be even though no detection landed."""
+    if not getattr(tracker, "lost_tracks", None):
+        return None
+    cur = getattr(tracker, "frame_id", None)
+    rows_xyxy, rows_conf, rows_cls, rows_id = [], [], [], []
+    for lt in tracker.lost_tracks:
+        tid = getattr(lt, "external_track_id", None)
+        if tid is None or int(tid) not in class_map:
+            continue
+        # Skip tracks lost too long (predictions become unreliable)
+        if cur is not None and getattr(lt, "frame_id", None) is not None:
+            if cur - lt.frame_id > max_age:
+                continue
+        rows_xyxy.append(lt.tlbr)
+        rows_conf.append(float(getattr(lt, "score", 0.0)))
+        rows_cls.append(class_map[int(tid)])
+        rows_id.append(int(tid))
+    if not rows_xyxy:
+        return None
+    return sv.Detections(
+        xyxy=np.asarray(rows_xyxy, dtype=np.float32),
+        confidence=np.asarray(rows_conf, dtype=np.float32),
+        class_id=np.asarray(rows_cls, dtype=np.int64),
+        tracker_id=np.asarray(rows_id, dtype=np.int64),
+    )
 
 
 def _line_label_pos(line, position: str) -> tuple[int, int]:
@@ -434,6 +468,7 @@ def run_stream(
     writer: cv2.VideoWriter | None = None
 
     n = 0
+    tracker_class_map: dict[int, int] = {}  # tracker_id → class_id (for ghost reconstruction)
     try:
         for result in model.predict(**kwargs):
             scene = result.orig_img.copy()  # BGR ndarray
@@ -444,6 +479,17 @@ def run_stream(
                 detections = detections[inside]
             if tracker is not None:
                 detections = tracker.update_with_detections(detections)
+                # Remember class for each tracker_id (lost tracks don't expose class_id)
+                if detections.tracker_id is not None and detections.class_id is not None:
+                    for i in range(len(detections)):
+                        tid = detections.tracker_id[i]
+                        if tid is not None:
+                            tracker_class_map[int(tid)] = int(detections.class_id[i])
+                # Ghost detections from Kalman predictions of recently-lost tracks
+                if cfg.show_ghost_tracks:
+                    ghosts = _ghost_detections(tracker, tracker_class_map, cfg.ghost_max_age)
+                    if ghosts is not None and len(ghosts) > 0:
+                        detections = sv.Detections.merge([detections, ghosts])
 
             labels: list[str] = []
             if len(detections) > 0:
