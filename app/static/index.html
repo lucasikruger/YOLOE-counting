@@ -428,12 +428,7 @@
 
     <div id="counts" style="display:none; margin-top:14px">
       <label>Conteos por clase</label>
-      <div class="counts-grid">
-        <div class="ch">Clase</div>
-        <div class="ch in" style="text-align:right">In</div>
-        <div class="ch out" style="text-align:right">Out</div>
-        <div id="counts-rows" style="display:contents"></div>
-      </div>
+      <div class="counts-grid" id="counts-grid"></div>
     </div>
 
     <div class="actions" id="download-row" style="display:none">
@@ -1289,13 +1284,27 @@ function renderCounts(job) {
   const cin = job.counts_in || {}, cout = job.counts_out || {};
   const names = job.class_names || [];
   if (names.length === 0 || !job.has_line) { $('counts').style.display = 'none'; return; }
+  const showIn = $('show-in').checked;
+  const showOut = $('show-out').checked;
+  if (!showIn && !showOut) { $('counts').style.display = 'none'; return; }
+  const inLbl = ($('in-label').value.trim() || 'in').toUpperCase();
+  const outLbl = ($('out-label').value.trim() || 'out').toUpperCase();
+  const lineColor = $('line-color').value;
   $('counts').style.display = 'block';
-  const rows = names.map(n => `
-    <div class="cn">${n}</div>
-    <div class="cv in">${cin[n] ?? 0}</div>
-    <div class="cv out">${cout[n] ?? 0}</div>
-  `).join('');
-  $('counts-rows').innerHTML = rows;
+  const grid = $('counts-grid');
+  // Columns: [swatch | clase | in? | out?]
+  const cols = ['auto', '1fr'].concat(showIn ? ['auto'] : [], showOut ? ['auto'] : []);
+  grid.style.gridTemplateColumns = cols.join(' ');
+  const sw = `<div style="width:14px;height:14px;border-radius:3px;background:${lineColor};border:1px solid var(--border);align-self:center"></div>`;
+  let html = `${sw}<div class="ch">Clase</div>`;
+  if (showIn) html += `<div class="ch in" style="text-align:right">${escapeHtml(inLbl)}</div>`;
+  if (showOut) html += `<div class="ch out" style="text-align:right">${escapeHtml(outLbl)}</div>`;
+  for (const n of names) {
+    html += `<div></div><div class="cn">${escapeHtml(n)}</div>`;
+    if (showIn) html += `<div class="cv in">${cin[n] ?? 0}</div>`;
+    if (showOut) html += `<div class="cv out">${cout[n] ?? 0}</div>`;
+  }
+  grid.innerHTML = html;
 }
 
 async function poll(jobId) {

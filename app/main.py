@@ -22,7 +22,8 @@ from app.detector import StreamConfig, extract_frame, probe_video, run_stream
 import datetime
 from fastapi import Body
 
-DATA_DIR = Path("/app/data")
+import os
+DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 UPLOAD_DIR = DATA_DIR / "uploads"
 OUTPUT_DIR = DATA_DIR / "outputs"
 STATIC_DIR = Path(__file__).parent / "static"

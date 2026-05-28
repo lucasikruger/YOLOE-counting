@@ -172,23 +172,38 @@ def _draw_legend(img, items: list[tuple[str, tuple[int, int, int]]], corner: str
 
 
 def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
-                         cout: dict[str, int], corner: str) -> None:
+                         cout: dict[str, int], corner: str,
+                         in_label: str = "in", out_label: str = "out",
+                         show_in: bool = True, show_out: bool = True,
+                         line_rgb: tuple[int, int, int] = (244, 114, 182)) -> None:
     """Draw a semi-transparent box with per-class in/out counts in a corner."""
     if not names:
+        return
+    if not (show_in or show_out):
         return
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = 0.55
     thick = 1
     line_h = 22
     pad = 8
-    # Build lines
-    header = "class       in   out"
-    lines = [header]
+    in_txt = (in_label or "in")[:6]
+    out_txt = (out_label or "out")[:6]
+    cols = []
+    if show_in: cols.append(("in", in_txt))
+    if show_out: cols.append(("out", out_txt))
+    header_parts = ["class".ljust(11)] + [c[1].rjust(6) for c in cols]
+    lines = [" ".join(header_parts)]
     for n in names:
-        lines.append(f"{n[:11]:<11} {cin.get(n,0):>3}  {cout.get(n,0):>3}")
+        row_parts = [n[:11].ljust(11)]
+        for kind, _ in cols:
+            v = cin.get(n, 0) if kind == "in" else cout.get(n, 0)
+            row_parts.append(str(v).rjust(6))
+        lines.append(" ".join(row_parts))
+    swatch_w = 14
+    swatch_gap = 6
     # Compute box size
     widths = [cv2.getTextSize(l, font, scale, thick)[0][0] for l in lines]
-    w = max(widths) + pad * 2
+    w = swatch_w + swatch_gap + max(widths) + pad * 2
     h = line_h * len(lines) + pad
     H, W = img.shape[:2]
     if corner == "TR":
@@ -204,10 +219,17 @@ def _draw_counts_overlay(img, names: list[str], cin: dict[str, int],
     cv2.rectangle(overlay, (x0, y0), (x0 + w, y0 + h), (12, 16, 22), -1)
     cv2.addWeighted(overlay, 0.65, img, 0.35, 0, dst=img)
     cv2.rectangle(img, (x0, y0), (x0 + w, y0 + h), (60, 80, 100), 1)
-    # Text lines
+    # Line swatch in header row (identifies which line these counts belong to)
+    bgr_line = (line_rgb[2], line_rgb[1], line_rgb[0])
+    sw_x = x0 + pad
+    sw_y = y0 + pad + 4
+    cv2.rectangle(img, (sw_x, sw_y), (sw_x + swatch_w, sw_y + swatch_w), bgr_line, -1)
+    cv2.rectangle(img, (sw_x, sw_y), (sw_x + swatch_w, sw_y + swatch_w), (230, 232, 235), 1)
+    # Text lines, shifted right to leave room for swatch column
+    text_x = x0 + pad + swatch_w + swatch_gap
     for i, line in enumerate(lines):
         y = y0 + pad + line_h * (i + 1) - 6
-        cv2.putText(img, line, (x0 + pad, y), font, scale, (230, 232, 235), thick, cv2.LINE_AA)
+        cv2.putText(img, line, (text_x, y), font, scale, (230, 232, 235), thick, cv2.LINE_AA)
 
 
 def extract_frame(video_path: Path, frame_index: int) -> np.ndarray:
@@ -375,13 +397,15 @@ def run_stream(
             start=sv.Point(x1, y1), end=sv.Point(x2, y2),
             triggering_anchors=[sv.Position.CENTER],
         )
+        # If counts overlay is on, suppress on-line text — counts go in the corner box.
+        on_line = not cfg.show_counts_overlay
         line_annotator = sv.LineZoneAnnotator(
             thickness=2, text_thickness=1, text_scale=0.6, text_padding=4,
             color=sv.Color(*line_rgb),
             custom_in_text=cfg.in_label or "in",
             custom_out_text=cfg.out_label or "out",
-            display_in_count=cfg.show_in,
-            display_out_count=cfg.show_out,
+            display_in_count=cfg.show_in and on_line,
+            display_out_count=cfg.show_out and on_line,
         )
 
     roi_zone = None
@@ -467,7 +491,12 @@ def run_stream(
 
             # Counts overlay in corner (after line so it sits on top)
             if cfg.show_counts_overlay and (line_zone is not None or roi_zone is not None):
-                _draw_counts_overlay(scene, names, counts_in, counts_out, cfg.counts_corner)
+                _draw_counts_overlay(
+                    scene, names, counts_in, counts_out, cfg.counts_corner,
+                    in_label=cfg.in_label, out_label=cfg.out_label,
+                    show_in=cfg.show_in, show_out=cfg.show_out,
+                    line_rgb=line_rgb,
+                )
 
             # Legend overlay
             if cfg.show_legend:
