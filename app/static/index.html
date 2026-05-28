@@ -83,6 +83,7 @@
   .frame-wrap svg.tool-bbox { cursor: crosshair; }
   .frame-wrap svg.tool-line { cursor: crosshair; }
   .frame-wrap svg.tool-roi { cursor: copy; }
+  .frame-wrap svg.tool-occ { cursor: copy; }
   .frame-wrap svg.tool-select { cursor: default; }
   .frame-wrap svg.tool-select rect.movable { cursor: move; }
   .frame-wrap svg .handle { cursor: nwse-resize; }
@@ -230,6 +231,7 @@
         <button type="button" class="tool-btn" data-tool="bbox" id="tool-bbox" disabled>Bbox</button>
         <button type="button" class="tool-btn active" data-tool="line" id="tool-line">Línea</button>
         <button type="button" class="tool-btn" data-tool="roi" id="tool-roi">ROI</button>
+        <button type="button" class="tool-btn" data-tool="occ" id="tool-occ">Ocupación</button>
       </div>
       <button type="button" class="ghost" id="clear-line" style="display:none">Borrar línea</button>
       <button type="button" class="ghost" id="close-roi" style="display:none">Cerrar polígono</button>
@@ -258,10 +260,22 @@
       <input id="show-out" type="checkbox" checked style="width:auto; margin:0" />
       <label for="show-out" style="margin:0; text-transform:none; letter-spacing:normal; color:var(--text); font-size:13px; cursor:pointer">mostrar OUT</label>
     </div>
-    <div id="roi-config" style="display:none; flex-direction:column; gap:8px; margin-top:8px">
-      <div style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">ROIs (<span id="roi-count">0</span>)</div>
+    <div id="roi-config" style="display:none; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap">
+      <span style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">ROI (filtro)</span>
+      <input id="roi-label" type="text" placeholder="Etiqueta (opcional)" style="flex:1; min-width:140px; max-width:260px" />
+      <select id="roi-label-position" style="width:auto" title="Posición del label">
+        <option value="center">Centro</option>
+        <option value="top">Arriba</option>
+        <option value="bottom">Abajo</option>
+        <option value="left">Izq</option>
+        <option value="right">Der</option>
+      </select>
+      <input id="roi-color" type="color" value="#60a5fa" style="width:38px; height:30px; padding:0; border:1px solid var(--border); border-radius:6px; background:transparent" />
+    </div>
+    <div id="occ-config" style="display:none; flex-direction:column; gap:8px; margin-top:8px">
+      <div style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em">Zonas de ocupación (<span id="roi-count">0</span>)</div>
       <div id="roi-list" style="display:flex; flex-direction:column; gap:6px"></div>
-      <div class="hint">Cada ROI cuenta su ocupación independientemente. El panel "libre/ocupado" se configura en Opciones avanzadas.</div>
+      <div class="hint">Cada zona cuenta ocupación independientemente. Configurá libre/ocupado en Opciones avanzadas → Panel ROI.</div>
     </div>
 
     <!-- TEXT MODE -->
@@ -709,7 +723,9 @@ function applySession(s) {
   state.bboxes = (s.bboxes || []).map(b => ({...b}));
   renderRoiList();
   state.line = s.line ? {...s.line} : null;
-  // Multi-ROI; migrate old single ROI if present
+  // Single filter ROI (legacy single-ROI behavior preserved)
+  state.roi = (s.roi && Array.isArray(s.roi) && s.roi.length >= 3) ? s.roi.map(p => [...p]) : null;
+  // Multi occupancy ROIs (separate concept from the filter ROI above)
   if (Array.isArray(s.rois) && s.rois.length > 0) {
     state.rois = s.rois.map((r, i) => ({
       id: r.id || ('r' + i + Date.now().toString(36)),
@@ -718,11 +734,6 @@ function applySession(s) {
       color: r.color || '#60a5fa',
       occupancy_threshold: r.occupancy_threshold || 1,
     }));
-  } else if (s.roi && s.roi.length >= 3) {
-    state.rois = [{
-      id: 'r-legacy', name: 'ROI 1', points: s.roi.map(p => [...p]),
-      color: s.roi_color || '#60a5fa', occupancy_threshold: 1,
-    }];
   } else {
     state.rois = [];
   }
@@ -981,9 +992,9 @@ function setTool(t) {
   state.tool = t;
   document.querySelectorAll('.tool-btn').forEach(x => x.classList.toggle('active', x.dataset.tool === t));
   const svg = $('frame-svg');
-  svg.classList.remove('tool-bbox', 'tool-line', 'tool-roi', 'tool-select');
+  svg.classList.remove('tool-bbox', 'tool-line', 'tool-roi', 'tool-occ', 'tool-select');
   svg.classList.add(`tool-${t}`);
-  if (t !== 'roi') { state.roiDrawing = null; state.roiCursor = null; }
+  if (t !== 'roi' && t !== 'occ') { state.roiDrawing = null; state.roiCursor = null; }
   if (t !== 'select') { state.selectedBboxIdx = null; state.bboxDrag = null; }
   updateHint();
   updateRoiButtons();
@@ -993,18 +1004,24 @@ function setTool(t) {
 function updateHint() {
   const h = $('tool-hint');
   if (state.tool === 'line') h.textContent = 'Línea · drag para crear. Si hay una, drag cerca de un extremo lo mueve. Ctrl+Z deshace.';
-  else if (state.tool === 'roi') h.textContent = 'ROI · click para agregar vértices. Con 3+ vértices, click sobre el primero (más grande) o doble-click cierra. Esc cancela.';
+  else if (state.tool === 'roi') h.textContent = 'ROI (filtro) · click para agregar vértices, "Cerrar polígono" o doble-click para finalizar. Una sola ROI — filtra detecciones a su interior. Esc cancela.';
+  else if (state.tool === 'occ') h.textContent = 'Ocupación · click para agregar vértices, "Cerrar polígono" o doble-click para finalizar. Cada polígono cerrado es una zona independiente. Podés agregar varias.';
   else if (state.tool === 'select') h.textContent = 'Selección · click un bbox para seleccionar. Drag al centro lo mueve, drag las esquinitas lo redimensiona. Del/Backspace borra. ESC deselecciona.';
   else h.textContent = 'Bbox · drag para marcar ejemplos. Alt+click borra un bbox. Ctrl+Z deshace.';
 }
 function updateRoiButtons() {
-  const isRoiTool = state.tool === 'roi';
-  $('close-roi').style.display = (isRoiTool && state.roiDrawing && state.roiDrawing.length >= 3) ? 'inline-block' : 'none';
-  $('clear-roi').style.display = (isRoiTool && state.rois.length > 0) ? 'inline-block' : 'none';
+  const isPolyTool = state.tool === 'roi' || state.tool === 'occ';
+  $('close-roi').style.display = (isPolyTool && state.roiDrawing && state.roiDrawing.length >= 3) ? 'inline-block' : 'none';
+  // "Borrar" semantics differ:
+  // - roi tool: clear the single state.roi
+  // - occ tool: clear ALL occupancy ROIs
+  const hasSomething = (state.tool === 'roi' && state.roi) || (state.tool === 'occ' && state.rois.length > 0);
+  $('clear-roi').style.display = (isPolyTool && hasSomething) ? 'inline-block' : 'none';
   $('clear-line').style.display = (state.tool === 'line' && state.line) ? 'inline-block' : 'none';
   $('line-config').style.display = (state.line || state.tool === 'line') ? 'flex' : 'none';
   $('line-counter-config').style.display = state.line ? 'flex' : 'none';
-  $('roi-config').style.display = state.tool === 'roi' ? 'flex' : 'none';
+  $('roi-config').style.display = (state.tool === 'roi' || state.roi) ? 'flex' : 'none';
+  $('occ-config').style.display = (state.tool === 'occ' || state.rois.length > 0) ? 'flex' : 'none';
 }
 
 $('clear-line').addEventListener('click', () => {
@@ -1020,30 +1037,38 @@ $('swap-line').addEventListener('click', () => {
 });
 $('close-roi').addEventListener('click', closeRoi);
 $('clear-roi').addEventListener('click', () => {
-  if (state.rois.length > 0) {
-    pushHistory();
-    state.rois = []; state.activeRoiId = null;
-    renderRoiList(); renderOverlay(); updateRoiButtons(); scheduleSave();
+  if (state.tool === 'roi') {
+    if (state.roi) { pushHistory(); state.roi = null; renderOverlay(); updateRoiButtons(); scheduleSave(); }
+  } else if (state.tool === 'occ') {
+    if (state.rois.length > 0) {
+      pushHistory();
+      state.rois = []; state.activeRoiId = null;
+      renderRoiList(); renderOverlay(); updateRoiButtons(); scheduleSave();
+    }
   }
 });
 
 function closeRoi() {
   if (!state.roiDrawing || state.roiDrawing.length < 3) return;
   pushHistory();
-  // Multi-ROI: create a new entry per draw
-  const id = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-  const idx = state.rois.length;
-  const palette = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#f87171', '#fb923c', '#22d3ee'];
-  state.rois.push({
-    id, name: `ROI ${idx + 1}`,
-    points: state.roiDrawing,
-    color: palette[idx % palette.length],
-    occupancy_threshold: 1,
-  });
-  state.activeRoiId = id;
+  if (state.tool === 'occ') {
+    const id = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    const idx = state.rois.length;
+    const palette = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#f87171', '#fb923c', '#22d3ee'];
+    state.rois.push({
+      id, name: `Zona ${idx + 1}`,
+      points: state.roiDrawing,
+      color: palette[idx % palette.length],
+      occupancy_threshold: 1,
+    });
+    state.activeRoiId = id;
+    renderRoiList();
+  } else {
+    // Single filter ROI
+    state.roi = state.roiDrawing;
+  }
   state.roiDrawing = null;
   state.roiCursor = null;
-  renderRoiList();
   renderOverlay();
   updateRoiButtons();
   scheduleSave();
@@ -1312,7 +1337,7 @@ function svgPoint(evt) {
   };
 }
 svg.addEventListener('pointerdown', (e) => {
-  if (state.tool === 'roi') return;
+  if (state.tool === 'roi' || state.tool === 'occ') return;
   e.preventDefault();
   svg.setPointerCapture(e.pointerId);
   const p = svgPoint(e);
@@ -1394,7 +1419,7 @@ svg.addEventListener('pointermove', (e) => {
       if (c.includes('t')) b.y1 = p.y; else b.y2 = p.y;
     }
     renderOverlay();
-  } else if (state.tool === 'roi' && state.roiDrawing) {
+  } else if ((state.tool === 'roi' || state.tool === 'occ') && state.roiDrawing) {
     const p = svgPoint(e); state.roiCursor = [p.x, p.y]; renderOverlay();
   }
 });
@@ -1452,17 +1477,9 @@ document.addEventListener('keydown', (e) => {
 });
 
 svg.addEventListener('click', (e) => {
-  if (state.tool === 'roi') {
+  if (state.tool === 'roi' || state.tool === 'occ') {
+    if (state.tool === 'roi' && state.roi) return;
     const p = svgPoint(e);
-    // Click cerca del primer vértice (con 3+ ya colocados) cierra el polígono
-    if (state.roiDrawing && state.roiDrawing.length >= 3) {
-      const first = state.roiDrawing[0];
-      const R = Math.max(state.upload.width, state.upload.height) * 0.025;
-      if (Math.hypot(p.x - first[0], p.y - first[1]) < R) {
-        closeRoi();
-        return;
-      }
-    }
     if (!state.roiDrawing) state.roiDrawing = [];
     state.roiDrawing.push([p.x, p.y]);
     state.roiCursor = [p.x, p.y];
@@ -1478,7 +1495,7 @@ svg.addEventListener('click', (e) => {
 });
 
 svg.addEventListener('dblclick', (e) => {
-  if (state.tool === 'roi') {
+  if (state.tool === 'roi' || state.tool === 'occ') {
     e.preventDefault();
     // El segundo click del double-click ya metió un vértice duplicado: lo saco antes de cerrar.
     if (state.roiDrawing && state.roiDrawing.length >= 2) {
@@ -1617,36 +1634,48 @@ function renderOverlay() {
     const l = state.lineDrawing;
     parts.push(`<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${$('line-color').value}" stroke-dasharray="6 3" />`);
   }
-  // Multi-ROI closed polygons
+  // Single filter ROI
+  if (state.roi) {
+    const rc = $('roi-color').value;
+    const pts = state.roi.map(p => `${p[0]},${p[1]}`).join(' ');
+    parts.push(`<polygon points="${pts}" fill="${rc}" fill-opacity="0.10" stroke="${rc}" stroke-width="2" stroke-dasharray="8 4" />`);
+    const rl = $('roi-label').value.trim();
+    if (rl) {
+      const [rx, ry, anc] = roiLabelPos(state.roi, $('roi-label-position').value);
+      parts.push(`<text x="${rx}" y="${ry}" text-anchor="${anc}" fill="${rc}">${escapeHtml(rl)}</text>`);
+    }
+  }
+  // Multi occupancy ROIs (solid stroke to differentiate from the filter ROI)
   state.rois.forEach(r => {
     const pts = r.points.map(p => `${p[0]},${p[1]}`).join(' ');
     parts.push(`<polygon points="${pts}" fill="${r.color}" fill-opacity="0.10" stroke="${r.color}" stroke-width="2" />`);
-    // Name label at centroid
     if (r.name) {
       const cx = r.points.reduce((s, p) => s + p[0], 0) / r.points.length;
       const cy = r.points.reduce((s, p) => s + p[1], 0) / r.points.length;
       parts.push(`<text x="${cx}" y="${cy}" text-anchor="middle" fill="${r.color}">${escapeHtml(r.name)}</text>`);
     }
   });
-  // ROI in-progress
+  // ROI / Ocupación in-progress
   if (state.roiDrawing && state.roiDrawing.length > 0) {
-    const rc = $('roi-color').value;
+    // En modo Ocupación, usamos el color que la próxima zona heredará del palette
+    let rc;
+    if (state.tool === 'occ') {
+      const palette = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#f87171', '#fb923c', '#22d3ee'];
+      rc = palette[state.rois.length % palette.length];
+    } else {
+      rc = $('roi-color').value;
+    }
     const drawn = state.roiDrawing.map(p => `${p[0]},${p[1]}`).join(' ');
-    parts.push(`<polyline points="${drawn}" stroke="${rc}" />`);
-    state.roiDrawing.forEach((p, idx) => {
-      // Marco el primer vértice más grande cuando ya hay 3+ — sirve como "click para cerrar"
-      const isFirstAndClosable = idx === 0 && state.roiDrawing.length >= 3;
-      const r = isFirstAndClosable ? 9 : 5;
-      const extra = isFirstAndClosable ? `stroke="#fff" stroke-width="2"` : '';
-      parts.push(`<circle cx="${p[0]}" cy="${p[1]}" r="${r}" fill="${rc}" ${extra}/>`);
+    parts.push(`<polyline points="${drawn}" stroke="${rc}" stroke-width="2" fill="none" />`);
+    state.roiDrawing.forEach(p => {
+      parts.push(`<circle cx="${p[0]}" cy="${p[1]}" r="5" fill="${rc}"/>`);
     });
     if (state.roiCursor) {
       const last = state.roiDrawing[state.roiDrawing.length - 1];
-      parts.push(`<line x1="${last[0]}" y1="${last[1]}" x2="${state.roiCursor[0]}" y2="${state.roiCursor[1]}" stroke="${$('roi-color').value}" stroke-dasharray="6 3" />`);
-      // preview close line
+      parts.push(`<line x1="${last[0]}" y1="${last[1]}" x2="${state.roiCursor[0]}" y2="${state.roiCursor[1]}" stroke="${rc}" stroke-dasharray="6 3" />`);
       if (state.roiDrawing.length >= 2) {
         const first = state.roiDrawing[0];
-        parts.push(`<line x1="${state.roiCursor[0]}" y1="${state.roiCursor[1]}" x2="${first[0]}" y2="${first[1]}" stroke="${$('roi-color').value}" stroke-dasharray="2 4" stroke-opacity="0.5" />`);
+        parts.push(`<line x1="${state.roiCursor[0]}" y1="${state.roiCursor[1]}" x2="${first[0]}" y2="${first[1]}" stroke="${rc}" stroke-dasharray="2 4" stroke-opacity="0.5" />`);
       }
     }
   }
@@ -1666,6 +1695,10 @@ function buildJobForm() {
   fd.append('show_id', $('show-id').checked ? 'true' : 'false');
   fd.append('show_conf', $('show-conf').checked ? 'true' : 'false');
   fd.append('line_label', $('line-label').value);
+  fd.append('roi_label', $('roi-label').value);
+  fd.append('roi_color', $('roi-color').value);
+  fd.append('roi_label_position', $('roi-label-position').value);
+  if (state.roi) fd.append('roi', JSON.stringify(state.roi));
   fd.append('rois', JSON.stringify(state.rois.map(r => ({
     name: r.name, points: r.points, color: r.color,
     occupancy_threshold: r.occupancy_threshold || 1,
@@ -1949,6 +1982,7 @@ updateHint();
  'outline-line', 'outline-roi', 'outline-bbox', 'line-thickness', 'bbox-thickness',
  'show-bbox-center', 'bbox-center-color', 'bbox-center-size',
  'line-label', 'line-color',
+ 'roi-label', 'roi-color', 'roi-label-position',
  'roi-panel-show', 'roi-panel-stack', 'roi-panel-corner',
  'roi-panel-free-color', 'roi-panel-occupied-color',
  'roi-panel-free-text', 'roi-panel-occupied-text',
@@ -1963,6 +1997,7 @@ updateHint();
 
 // Live-update SVG overlay when label / color / position changes
 ['line-label', 'line-color',
+ 'roi-label', 'roi-color', 'roi-label-position',
  'line-label-position',
  'bbox-label-position',
  'in-label', 'out-label'].forEach(id => {
