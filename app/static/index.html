@@ -928,7 +928,7 @@ function setTool(t) {
 function updateHint() {
   const h = $('tool-hint');
   if (state.tool === 'line') h.textContent = 'Línea · drag para crear. Si hay una, drag cerca de un extremo lo mueve. Ctrl+Z deshace.';
-  else if (state.tool === 'roi') h.textContent = 'ROI · click para agregar vértices. Doble-click o "Cerrar polígono" para finalizar.';
+  else if (state.tool === 'roi') h.textContent = 'ROI · click para agregar vértices. Con 3+ vértices, click sobre el primero (más grande) o doble-click cierra. Esc cancela.';
   else if (state.tool === 'select') h.textContent = 'Selección · click un bbox para seleccionar. Drag al centro lo mueve, drag las esquinitas lo redimensiona. Del/Backspace borra. ESC deselecciona.';
   else h.textContent = 'Bbox · drag para marcar ejemplos. Alt+click borra un bbox. Ctrl+Z deshace.';
 }
@@ -1340,8 +1340,17 @@ document.addEventListener('keydown', (e) => {
 
 svg.addEventListener('click', (e) => {
   if (state.tool === 'roi') {
-    if (state.roi) return;  // primero borrar ROI existente
+    if (state.roi) return;
     const p = svgPoint(e);
+    // Click cerca del primer vértice (con 3+ ya colocados) cierra el polígono
+    if (state.roiDrawing && state.roiDrawing.length >= 3) {
+      const first = state.roiDrawing[0];
+      const R = Math.max(state.upload.width, state.upload.height) * 0.025;
+      if (Math.hypot(p.x - first[0], p.y - first[1]) < R) {
+        closeRoi();
+        return;
+      }
+    }
     if (!state.roiDrawing) state.roiDrawing = [];
     state.roiDrawing.push([p.x, p.y]);
     state.roiCursor = [p.x, p.y];
@@ -1357,7 +1366,18 @@ svg.addEventListener('click', (e) => {
 });
 
 svg.addEventListener('dblclick', (e) => {
-  if (state.tool === 'roi') { e.preventDefault(); closeRoi(); }
+  if (state.tool === 'roi') {
+    e.preventDefault();
+    // El segundo click del double-click ya metió un vértice duplicado: lo saco antes de cerrar.
+    if (state.roiDrawing && state.roiDrawing.length >= 2) {
+      const last = state.roiDrawing[state.roiDrawing.length - 1];
+      const prev = state.roiDrawing[state.roiDrawing.length - 2];
+      if (Math.hypot(last[0] - prev[0], last[1] - prev[1]) < 8) {
+        state.roiDrawing.pop();
+      }
+    }
+    closeRoi();
+  }
 });
 
 document.addEventListener('keydown', (e) => {
@@ -1498,10 +1518,15 @@ function renderOverlay() {
   }
   // ROI in-progress
   if (state.roiDrawing && state.roiDrawing.length > 0) {
+    const rc = $('roi-color').value;
     const drawn = state.roiDrawing.map(p => `${p[0]},${p[1]}`).join(' ');
-    parts.push(`<polyline points="${drawn}" stroke="${$('roi-color').value}" />`);
-    state.roiDrawing.forEach(p => {
-      parts.push(`<circle cx="${p[0]}" cy="${p[1]}" r="5" fill="${$('roi-color').value}"/>`);
+    parts.push(`<polyline points="${drawn}" stroke="${rc}" />`);
+    state.roiDrawing.forEach((p, idx) => {
+      // Marco el primer vértice más grande cuando ya hay 3+ — sirve como "click para cerrar"
+      const isFirstAndClosable = idx === 0 && state.roiDrawing.length >= 3;
+      const r = isFirstAndClosable ? 9 : 5;
+      const extra = isFirstAndClosable ? `stroke="#fff" stroke-width="2"` : '';
+      parts.push(`<circle cx="${p[0]}" cy="${p[1]}" r="${r}" fill="${rc}" ${extra}/>`);
     });
     if (state.roiCursor) {
       const last = state.roiDrawing[state.roiDrawing.length - 1];
