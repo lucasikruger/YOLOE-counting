@@ -1337,7 +1337,18 @@ function svgPoint(evt) {
   };
 }
 svg.addEventListener('pointerdown', (e) => {
-  if (state.tool === 'roi' || state.tool === 'occ') return;
+  if (state.tool === 'roi' || state.tool === 'occ') {
+    // Add vertex on pointerdown (more reliable than click — click is delayed
+    // and sometimes suppressed by the dblclick handler).
+    if (state.tool === 'roi' && state.roi) return;
+    e.preventDefault();
+    const p = svgPoint(e);
+    if (!state.roiDrawing) state.roiDrawing = [];
+    state.roiDrawing.push([p.x, p.y]);
+    state.roiCursor = [p.x, p.y];
+    renderOverlay(); updateRoiButtons();
+    return;
+  }
   e.preventDefault();
   svg.setPointerCapture(e.pointerId);
   const p = svgPoint(e);
@@ -1477,15 +1488,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 svg.addEventListener('click', (e) => {
-  if (state.tool === 'roi' || state.tool === 'occ') {
-    if (state.tool === 'roi' && state.roi) return;
-    const p = svgPoint(e);
-    if (!state.roiDrawing) state.roiDrawing = [];
-    state.roiDrawing.push([p.x, p.y]);
-    state.roiCursor = [p.x, p.y];
-    renderOverlay(); updateRoiButtons();
-    return;
-  }
+  // ROI/Ocup vertex creation moved to pointerdown — see above.
+  if (state.tool === 'roi' || state.tool === 'occ') return;
   if (!e.altKey) return;
   const g = e.target.closest('g[data-i]');
   if (!g) return;
@@ -1497,7 +1501,8 @@ svg.addEventListener('click', (e) => {
 svg.addEventListener('dblclick', (e) => {
   if (state.tool === 'roi' || state.tool === 'occ') {
     e.preventDefault();
-    // El segundo click del double-click ya metió un vértice duplicado: lo saco antes de cerrar.
+    // Each pointerdown in roi/occ pushes a vertex, so a double-click pushed two
+    // near-duplicates. Strip both before closing so the final poly is clean.
     if (state.roiDrawing && state.roiDrawing.length >= 2) {
       const last = state.roiDrawing[state.roiDrawing.length - 1];
       const prev = state.roiDrawing[state.roiDrawing.length - 2];
