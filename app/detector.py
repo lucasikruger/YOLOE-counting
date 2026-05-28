@@ -1,17 +1,17 @@
-"""YOLOE detection: text + visual prompts (multi-frame pooling), streaming, tracking, line counting."""
+"""YOLO detection: YOLOE (open-vocab) + standard YOLO + YOLO-OBB, with streaming, tracking and line counting."""
 
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import cv2
 import numpy as np
 import supervision as sv
 import torch
-from ultralytics import YOLOE
+from ultralytics import YOLO, YOLOE
 from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
 
 
@@ -19,7 +19,10 @@ from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
 class StreamConfig:
     video_path: Path
     output_dir: Path
-    mode: str  # "text" or "visual"
+    mode: str  # "text" or "visual"   (only used when model_type == "yoloe")
+    # Detector backbone
+    model_type: str = "yoloe"          # "yoloe" | "yolo" | "yolo-obb"
+    yolo_class_ids: list[int] = field(default_factory=list)
     # text-mode
     prompts: list[str] = field(default_factory=list)
     # visual-mode
@@ -123,10 +126,18 @@ class DetectionResult:
     roi_occupancy: dict[str, dict] = field(default_factory=dict)
 
 
-def _get_model(name: str) -> YOLOE:
-    # Always fresh: set_classes() mutates internal projection layers, so a model
-    # configured for N classes can crash on the next run with M != N.
-    return YOLOE(name)
+def _get_model(name: str, model_type: str = "yoloe") -> Any:
+    # Always fresh: set_classes() mutates internal projection layers on YOLOE,
+    # so a model configured for N classes can crash on the next run with M != N.
+    if model_type == "yoloe":
+        return YOLOE(name)
+    return YOLO(name)
+
+
+def get_model_class_names(model_name: str, model_type: str) -> dict[int, str]:
+    """Briefly load a model and return its class names dict (for the UI picker)."""
+    m = _get_model(model_name, model_type)
+    return {int(k): str(v) for k, v in m.names.items()}
 
 
 def _draw_label(img, text: str, center: tuple[int, int], color_rgb: tuple[int, int, int]) -> None:
@@ -503,8 +514,20 @@ def _compute_pooled_vpe(model: YOLOE, cfg: StreamConfig, tmp_dir: Path) -> tuple
     return names, pooled
 
 
-def _prepare(cfg: StreamConfig) -> tuple[YOLOE, list[str]]:
-    model = _get_model(cfg.model_name)
+def _prepare(cfg: StreamConfig) -> tuple[Any, list[str]]:
+    model = _get_model(cfg.model_name, cfg.model_type)
+    # Standard YOLO / YOLO-OBB: use the model's built-in class list. The user
+    # picked a subset of class IDs in the UI; we pass those to predict to
+    # filter detections, and align our display names to that subset.
+    if cfg.model_type in ("yolo", "yolo-obb"):
+        all_names: dict[int, str] = {int(k): str(v) for k, v in model.names.items()}
+        ids = cfg.yolo_class_ids or list(all_names.keys())
+        ids = [i for i in ids if i in all_names]
+        if not ids:
+            raise ValueError("Seleccioná al menos una clase del modelo.")
+        cfg.yolo_class_ids = ids
+        names = [all_names[i] for i in ids]
+        return model, names
     if cfg.mode == "text":
         if not cfg.prompts:
             raise ValueError("At least one prompt required.")
@@ -646,6 +669,9 @@ def run_stream(
         conf=cfg.conf, iou=cfg.iou, imgsz=cfg.imgsz, device=cfg.device,
         stream=True, vid_stride=cfg.vid_stride, verbose=False,
     )
+    # Standard YOLO / YOLO-OBB: filter detections to the user-selected class IDs
+    if cfg.model_type in ("yolo", "yolo-obb") and cfg.yolo_class_ids:
+        kwargs["classes"] = list(cfg.yolo_class_ids)
 
     output_video = cfg.output_dir / f"{cfg.video_path.stem}_raw.mp4"
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -658,6 +684,17 @@ def run_stream(
         for result in model.predict(**kwargs):
             scene = result.orig_img.copy()  # BGR ndarray
             detections = sv.Detections.from_ultralytics(result)
+            # For standard YOLO modes, remap class_id from the model's full
+            # vocabulary down to our selected subset so palette + label arrays
+            # stay aligned with `names`.
+            if cfg.model_type in ("yolo", "yolo-obb") and cfg.yolo_class_ids \
+               and detections.class_id is not None and len(detections) > 0:
+                id_remap = {orig_id: i for i, orig_id in enumerate(cfg.yolo_class_ids)}
+                new_ids = np.array(
+                    [id_remap.get(int(c), 0) for c in detections.class_id],
+                    dtype=detections.class_id.dtype,
+                )
+                detections.class_id = new_ids
             # ROI: filter detections to those whose center is inside the polygon
             if roi_zone is not None and len(detections) > 0:
                 inside = roi_zone.trigger(detections)

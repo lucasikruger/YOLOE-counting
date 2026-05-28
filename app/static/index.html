@@ -210,7 +210,16 @@
   <!-- Config -->
   <div id="config-card" class="card" style="display:none">
 
-    <div class="tabs">
+    <div style="display:flex; align-items:center; gap:14px; margin-bottom:14px; flex-wrap:wrap">
+      <label for="model-type" style="margin:0; text-transform:uppercase; font-size:12px; letter-spacing:0.04em; color:var(--muted)">Tipo de modelo</label>
+      <select id="model-type" style="width:auto">
+        <option value="yoloe" selected>YOLOE (open-vocab)</option>
+        <option value="yolo">YOLO (COCO 80 clases)</option>
+        <option value="yolo-obb">YOLO-OBB (DOTA - bbox rotadas)</option>
+      </select>
+    </div>
+
+    <div class="tabs" id="mode-tabs">
       <div class="tab active" data-mode="text">Texto</div>
       <div class="tab" data-mode="visual">Marcar en imagen</div>
     </div>
@@ -285,6 +294,18 @@
       <div class="hint">Frases cortas en inglés: "pressure gauge" mejor que "the pressure measuring instrument".</div>
     </div>
 
+    <!-- YOLO/YOLO-OBB MODE: class checklist -->
+    <div id="mode-yolo" style="display:none; margin-top:18px">
+      <label>Clases a detectar (<span id="yolo-selected-count">0</span> / <span id="yolo-total-count">0</span>)</label>
+      <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap">
+        <input id="yolo-class-filter" type="text" placeholder="Filtrar (ej: car, person, truck)" style="flex:1; min-width:200px; max-width:300px" />
+        <button type="button" id="yolo-select-all" class="ghost">Todas</button>
+        <button type="button" id="yolo-select-none" class="ghost">Ninguna</button>
+      </div>
+      <div id="yolo-class-list" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:4px 10px; max-height:240px; overflow-y:auto; padding:8px; background:var(--panel-2); border:1px solid var(--border); border-radius:8px"></div>
+      <div class="hint">YOLO estándar usa clases fijas del modelo (COCO 80 / DOTA 15). Para clases custom, usá modo Texto con YOLOE.</div>
+    </div>
+
     <!-- VISUAL MODE -->
     <div id="mode-visual" style="display:none; margin-top:18px">
       <label>Clases (marcá ejemplos en el frame con la herramienta Bbox)</label>
@@ -302,13 +323,7 @@
       <div class="row">
         <div>
           <label>Modelo</label>
-          <select id="model">
-            <option value="yoloe-11s-seg.pt">YOLOE-11s (rápido)</option>
-            <option value="yoloe-11m-seg.pt">YOLOE-11m</option>
-            <option value="yoloe-11l-seg.pt">YOLOE-11l (preciso)</option>
-            <option value="yoloe-v8s-seg.pt">YOLOE-v8s</option>
-            <option value="yoloe-v8l-seg.pt">YOLOE-v8l</option>
-          </select>
+          <select id="model"></select>
         </div>
         <div>
           <label>Confianza</label>
@@ -622,7 +637,55 @@
 const $ = (id) => document.getElementById(id);
 const PALETTE = ['#34d399', '#fbbf24', '#60a5fa', '#f472b6', '#a78bfa', '#f87171', '#fb923c', '#22d3ee'];
 
+const MODEL_LISTS = {
+  yoloe: [
+    { value: 'yoloe-11s-seg.pt', label: 'YOLOE-11s (rápido)' },
+    { value: 'yoloe-11m-seg.pt', label: 'YOLOE-11m' },
+    { value: 'yoloe-11l-seg.pt', label: 'YOLOE-11l (preciso)' },
+    { value: 'yoloe-v8s-seg.pt', label: 'YOLOE-v8s' },
+    { value: 'yoloe-v8l-seg.pt', label: 'YOLOE-v8l' },
+  ],
+  yolo: [
+    { value: 'yolo26n.pt', label: 'YOLO26-n (más rápido)' },
+    { value: 'yolo26s.pt', label: 'YOLO26-s' },
+    { value: 'yolo26m.pt', label: 'YOLO26-m' },
+    { value: 'yolo26l.pt', label: 'YOLO26-l' },
+    { value: 'yolo26x.pt', label: 'YOLO26-x (más preciso)' },
+    { value: 'yolo11n.pt', label: 'YOLO11-n' },
+    { value: 'yolo11s.pt', label: 'YOLO11-s' },
+    { value: 'yolo11m.pt', label: 'YOLO11-m' },
+    { value: 'yolo11l.pt', label: 'YOLO11-l' },
+    { value: 'yolo11x.pt', label: 'YOLO11-x' },
+    { value: 'yolov8n.pt', label: 'YOLOv8-n' },
+    { value: 'yolov8s.pt', label: 'YOLOv8-s' },
+  ],
+  'yolo-obb': [
+    { value: 'yolo26n-obb.pt', label: 'YOLO26-n OBB (más rápido)' },
+    { value: 'yolo26s-obb.pt', label: 'YOLO26-s OBB' },
+    { value: 'yolo26m-obb.pt', label: 'YOLO26-m OBB' },
+    { value: 'yolo26l-obb.pt', label: 'YOLO26-l OBB' },
+    { value: 'yolo26x-obb.pt', label: 'YOLO26-x OBB' },
+    { value: 'yolo11n-obb.pt', label: 'YOLO11-n OBB' },
+    { value: 'yolo11s-obb.pt', label: 'YOLO11-s OBB' },
+    { value: 'yolo11m-obb.pt', label: 'YOLO11-m OBB' },
+    { value: 'yolo11l-obb.pt', label: 'YOLO11-l OBB' },
+    { value: 'yolov8n-obb.pt', label: 'YOLOv8-n OBB' },
+  ],
+};
+
+function repopulateModelSelect(modelType) {
+  const sel = $('model');
+  const prev = sel.value;
+  const list = MODEL_LISTS[modelType] || MODEL_LISTS.yoloe;
+  sel.innerHTML = list.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+  // Try to preserve the previous selection if it's still valid
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
 const state = {
+  modelType: 'yoloe',                    // yoloe | yolo | yolo-obb
+  yoloClassIds: [],                      // selected class IDs for yolo/yolo-obb
+  yoloClassNames: {},                    // cache of model.names {id: name}
   mode: 'text',
   tool: 'line',  // 'bbox' | 'line'
   upload: null,
@@ -718,6 +781,10 @@ async function openUpload(upload, fromList) {
 
 function applySession(s) {
   state.mode = s.mode || 'text';
+  state.modelType = (s.model_type && s.model_type in MODEL_LISTS) ? s.model_type : 'yoloe';
+  state.yoloClassIds = Array.isArray(s.yolo_class_ids) ? [...s.yolo_class_ids] : [];
+  $('model-type').value = state.modelType;
+  setModelType(state.modelType);
   state.classes = (s.classes && s.classes.length) ? s.classes.map(c => ({...c})) : [];
   if (state.classes.length === 0) addClassSilent();
   state.activeClassId = (s.active_class_id != null) ? s.active_class_id : state.classes[0]?.id;
@@ -822,6 +889,8 @@ function applySession(s) {
 function snapshotSession() {
   return {
     mode: state.mode,
+    model_type: state.modelType,
+    yolo_class_ids: state.yoloClassIds,
     classes: state.classes,
     active_class_id: state.activeClassId,
     bboxes: state.bboxes,
@@ -971,6 +1040,86 @@ function showConfigError(msg) {
 function clearConfigError() { $('config-error').style.display = 'none'; }
 
 // ---------- mode tabs ----------
+function setModelType(t) {
+  state.modelType = (t in MODEL_LISTS) ? t : 'yoloe';
+  $('model-type').value = state.modelType;
+  repopulateModelSelect(state.modelType);
+  const isYolo = state.modelType !== 'yoloe';
+  $('mode-tabs').style.display = isYolo ? 'none' : 'flex';
+  $('mode-yolo').style.display = isYolo ? 'block' : 'none';
+  $('mode-text').style.display = (!isYolo && state.mode === 'text') ? 'block' : 'none';
+  $('mode-visual').style.display = (!isYolo && state.mode === 'visual') ? 'block' : 'none';
+  if (isYolo) {
+    fetchYoloClasses($('model').value);
+  }
+}
+
+$('model-type').addEventListener('change', (e) => {
+  setModelType(e.target.value);
+  scheduleSave();
+});
+$('model').addEventListener('change', () => {
+  if (state.modelType !== 'yoloe') fetchYoloClasses($('model').value);
+});
+
+async function fetchYoloClasses(modelName) {
+  const list = $('yolo-class-list');
+  list.innerHTML = '<div class="sub">Cargando clases...</div>';
+  try {
+    const r = await fetch(`/api/model-classes?model=${encodeURIComponent(modelName)}&model_type=${state.modelType}`);
+    if (!r.ok) { list.innerHTML = `<div class="error-box">No pude cargar las clases del modelo (${r.status}).</div>`; return; }
+    const { names } = await r.json();
+    state.yoloClassNames = names;
+    if (state.yoloClassIds.length === 0) {
+      // Default: nothing selected, user must pick
+    }
+    renderYoloClassList();
+  } catch (err) {
+    list.innerHTML = `<div class="error-box">Error: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderYoloClassList() {
+  const list = $('yolo-class-list');
+  const filter = ($('yolo-class-filter').value || '').toLowerCase().trim();
+  const entries = Object.entries(state.yoloClassNames || {})
+    .map(([id, name]) => ({ id: +id, name }))
+    .sort((a, b) => a.id - b.id)
+    .filter(c => !filter || c.name.toLowerCase().includes(filter));
+  $('yolo-total-count').textContent = Object.keys(state.yoloClassNames || {}).length;
+  $('yolo-selected-count').textContent = state.yoloClassIds.length;
+  list.innerHTML = entries.map(c => {
+    const checked = state.yoloClassIds.includes(c.id) ? 'checked' : '';
+    return `<label style="display:flex; align-items:center; gap:6px; padding:2px 4px; cursor:pointer; font-size:13px">
+      <input type="checkbox" data-id="${c.id}" ${checked} style="width:auto; margin:0" />
+      <span style="font-family:ui-monospace, monospace; color:var(--muted); font-size:11px">${c.id}</span>
+      <span>${escapeHtml(c.name)}</span>
+    </label>`;
+  }).join('');
+  list.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const id = +e.target.dataset.id;
+      if (e.target.checked) {
+        if (!state.yoloClassIds.includes(id)) state.yoloClassIds.push(id);
+      } else {
+        state.yoloClassIds = state.yoloClassIds.filter(x => x !== id);
+      }
+      $('yolo-selected-count').textContent = state.yoloClassIds.length;
+      scheduleSave();
+    });
+  });
+}
+
+$('yolo-class-filter').addEventListener('input', renderYoloClassList);
+$('yolo-select-all').addEventListener('click', () => {
+  state.yoloClassIds = Object.keys(state.yoloClassNames || {}).map(k => +k);
+  renderYoloClassList(); scheduleSave();
+});
+$('yolo-select-none').addEventListener('click', () => {
+  state.yoloClassIds = [];
+  renderYoloClassList(); scheduleSave();
+});
+
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
@@ -1711,6 +1860,8 @@ function renderOverlay() {
 function buildJobForm() {
   const fd = new FormData();
   fd.append('upload_id', state.upload.upload_id);
+  fd.append('model_type', state.modelType);
+  fd.append('yolo_class_ids', JSON.stringify(state.yoloClassIds));
   fd.append('mode', state.mode);
   fd.append('model', $('model').value);
   fd.append('conf', $('conf').value);
@@ -2030,6 +2181,9 @@ updateHint();
   el.addEventListener('input', renderOverlay);
   el.addEventListener('change', renderOverlay);
 });
+
+// Initial: populate the model dropdown for the current type
+setModelType(state.modelType);
 
 // Populate device dropdown
 (async () => {

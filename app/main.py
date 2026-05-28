@@ -303,9 +303,31 @@ def get_frame(upload_id: str, index: int = 0) -> Response:
                     headers={"Cache-Control": "no-store"})
 
 
+_MODEL_NAMES_CACHE: dict[str, dict[int, str]] = {}
+
+
+@app.get("/api/model-classes")
+def model_classes(model: str, model_type: str = "yolo") -> dict:
+    """Return the class-id → name mapping for a given model.
+    Loads the model briefly (downloading weights if needed) and caches the
+    result by (model, type)."""
+    if model_type not in ("yoloe", "yolo", "yolo-obb"):
+        raise HTTPException(400, "Invalid model_type")
+    key = f"{model_type}:{model}"
+    if key not in _MODEL_NAMES_CACHE:
+        try:
+            from app.detector import get_model_class_names
+            _MODEL_NAMES_CACHE[key] = get_model_class_names(model, model_type)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, f"Could not load model: {exc}")
+    return {"names": _MODEL_NAMES_CACHE[key]}
+
+
 @app.post("/api/jobs")
 async def create_job(
     upload_id: str = Form(...),
+    model_type: str = Form("yoloe"),
+    yolo_class_ids: str = Form("[]"),
     mode: str = Form("text"),
     prompts: str = Form(""),
     bboxes: str = Form("[]"),
@@ -403,6 +425,8 @@ async def create_job(
     job_id = uuid.uuid4().hex[:12]
     cfg = StreamConfig(
         video_path=upload.path, output_dir=OUTPUT_DIR / job_id, mode=mode,
+        model_type=model_type if model_type in ("yoloe","yolo","yolo-obb") else "yoloe",
+        yolo_class_ids=[int(i) for i in _safe_list(yolo_class_ids) if isinstance(i, int) or (isinstance(i, str) and i.isdigit())],
         model_name=model, conf=conf, vid_stride=stride, device=device,
         use_tracker=use_tracker or (line_coords is not None),
         line=line_coords, roi_polygon=roi_polygon, frame_index=frame_index,
@@ -452,7 +476,21 @@ async def create_job(
         show_in=show_in, show_out=show_out,
     )
 
-    if mode == "text":
+    # Standard YOLO modes bypass the prompt logic entirely — the class names
+    # come from the model itself filtered by the user-selected class IDs.
+    if cfg.model_type in ("yolo", "yolo-obb"):
+        try:
+            from app.detector import get_model_class_names
+            all_names = get_model_class_names(cfg.model_name, cfg.model_type)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, f"Could not load model class names: {exc}")
+        ids = cfg.yolo_class_ids or list(all_names.keys())
+        ids = [i for i in ids if i in all_names]
+        if not ids:
+            raise HTTPException(400, "Seleccioná al menos una clase del modelo.")
+        cfg.yolo_class_ids = ids
+        full_names = [all_names[i] for i in ids]
+    elif mode == "text":
         names = [p.strip() for p in prompts.split(",") if p.strip()]
         if not names:
             raise HTTPException(400, "At least one prompt required.")
