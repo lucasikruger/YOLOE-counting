@@ -1085,12 +1085,12 @@ function renderOverlay() {
     parts.push(`<line x1="${L.x1}" y1="${L.y1}" x2="${L.x2}" y2="${L.y2}" stroke="${lc}" />`);
     parts.push(`<circle cx="${L.x1}" cy="${L.y1}" r="6" fill="${lc}"/>`);
     parts.push(`<circle cx="${L.x2}" cy="${L.y2}" r="6" fill="${lc}"/>`);
-    // IN side indicator: per supervision, cross_product > 0 = LEFT of vector (start→end)
-    // = perpendicular (-dy, dx) direction. Draw arrow + IN/OUT labels.
+    // IN side: empirically verified — for line start→end, IN is the side where
+    // perpendicular (dy, -dx) points (= right of vector in math; up for L→R horizontal).
     const mx = (L.x1 + L.x2) / 2, my = (L.y1 + L.y2) / 2;
     const dx = L.x2 - L.x1, dy = L.y2 - L.y1;
     const len = Math.hypot(dx, dy) || 1;
-    const perpX = -dy / len, perpY = dx / len;        // left of direction
+    const perpX = dy / len, perpY = -dx / len;        // IN direction
     const arrowLen = 28, headSize = 8;
     const ax = mx + perpX * arrowLen, ay = my + perpY * arrowLen;
     // Arrow shaft
