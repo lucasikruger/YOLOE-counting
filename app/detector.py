@@ -55,7 +55,9 @@ class StreamConfig:
     rate_source: str = "both"     # "in" | "out" | "both"
     show_rate_window: bool = True  # show "(vent. Xs)" next to the rate header
     # Stroke / center-dot styling
-    outline_strokes: bool = True
+    outline_line: bool = True
+    outline_roi: bool = True
+    outline_bbox: bool = True
     line_thickness: int = 2
     bbox_thickness: int = 2
     show_bbox_center: bool = False
@@ -480,12 +482,19 @@ def run_stream(
     else:
         palette = sv.ColorPalette.DEFAULT
 
-    box_outline_ann = sv.BoxAnnotator(thickness=cfg.bbox_thickness + 3, color=sv.Color.BLACK) if cfg.outline_strokes else None
+    box_outline_ann = sv.BoxAnnotator(thickness=cfg.bbox_thickness + 3, color=sv.Color.BLACK) if cfg.outline_bbox else None
     box_ann = sv.BoxAnnotator(thickness=cfg.bbox_thickness, color=palette)
     try:
         bbox_pos = sv.Position[cfg.bbox_label_position]
     except KeyError:
         bbox_pos = sv.Position.TOP_LEFT
+    # Label outline: stack two LabelAnnotators with different paddings — the
+    # bigger black one peeks out around the smaller colored one as a 1-2 px ring.
+    label_outline_ann = sv.LabelAnnotator(
+        text_scale=0.5, text_padding=5, text_thickness=1,
+        text_position=bbox_pos,
+        color=sv.Color.BLACK, text_color=sv.Color.BLACK,
+    ) if cfg.outline_bbox else None
     label_ann = sv.LabelAnnotator(text_scale=0.5, text_padding=3, text_thickness=1,
                                   text_position=bbox_pos, color=palette)
     mask_ann = sv.MaskAnnotator(color=palette, opacity=0.45) if cfg.show_mask else None
@@ -597,16 +606,21 @@ def run_stream(
                     for i in range(len(detections)):
                         x1b, y1b, x2b, y2b = detections.xyxy[i].astype(int)
                         cx, cy = (x1b + x2b) // 2, (y1b + y2b) // 2
-                        if cfg.outline_strokes:
+                        if cfg.outline_bbox:
                             cv2.circle(scene, (cx, cy), cfg.bbox_center_size + 2, (0, 0, 0), -1)
                         cv2.circle(scene, (cx, cy),
                                    max(1, cfg.bbox_center_size),
                                    (bbox_center_rgb[2], bbox_center_rgb[1], bbox_center_rgb[0]), -1)
                 if any(l for l in labels):
+                    if label_outline_ann is not None:
+                        scene = label_outline_ann.annotate(scene=scene, detections=detections, labels=labels)
                     scene = label_ann.annotate(scene=scene, detections=detections, labels=labels)
 
             # ROI outline always visible (after detections so it overlays cleanly)
             if roi_annotator is not None:
+                if cfg.outline_roi and cfg.roi_polygon:
+                    pts = np.array(cfg.roi_polygon, dtype=np.int32).reshape(-1, 1, 2)
+                    cv2.polylines(scene, [pts], True, (0, 0, 0), 4, lineType=cv2.LINE_AA)
                 scene = roi_annotator.annotate(scene=scene)
                 if cfg.roi_label and cfg.roi_polygon:
                     pos = _roi_label_pos(cfg.roi_polygon, cfg.roi_label_position)
@@ -638,7 +652,7 @@ def run_stream(
                     rates[cname] = (len(dq) / current_window) * factor if current_window > 0 else 0.0
                 # Outline pass: draw a thicker black line first so the colored
                 # line on top has a dark border for visibility on any background.
-                if cfg.outline_strokes:
+                if cfg.outline_line:
                     cv2.line(scene,
                              (int(cfg.line[0]), int(cfg.line[1])),
                              (int(cfg.line[2]), int(cfg.line[3])),
